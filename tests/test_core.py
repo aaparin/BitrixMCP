@@ -91,6 +91,26 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, [])
 
+    async def test_normalizes_uppercase_company_list_params(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.read().decode()
+            self.assertIn('"filter":{"=TITLE":"Dumbo - 1"}', body)
+            self.assertIn('"select":["ID","TITLE","ASSIGNED_BY_ID"]', body)
+            self.assertNotIn('"FILTER"', body)
+            self.assertNotIn('"SELECT"', body)
+            return httpx.Response(200, json={'result': []})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = await client.call_method(
+            'crm.company.list',
+            {'FILTER': {'NAME': 'Dumbo - 1'}, 'SELECT': ['ID']},
+        )
+        self.assertEqual(result, [])
+
     async def test_normalizes_user_get_string_filter(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             body = request.read().decode()
