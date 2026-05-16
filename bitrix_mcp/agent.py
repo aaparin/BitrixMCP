@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 import logfire
 from pydantic_ai import Agent, ModelRetry, RunContext
@@ -34,6 +34,57 @@ class AgentDeps:
 
 
 DOCS_CACHE = TTLCache(ttl_seconds=3600)
+
+CRM_ENTITY_METHODS = {
+    'company': 'crm.company.list',
+    'contact': 'crm.contact.list',
+    'deal': 'crm.deal.list',
+    'lead': 'crm.lead.list',
+}
+
+
+def compact_records(value: Any, *, limit: int = 10) -> Any:
+    records = extract_records(value)
+    if records is None:
+        return value
+    compacted = records[:limit]
+    if len(records) > limit:
+        return {
+            'items': compacted,
+            'truncated': True,
+            'returned': limit,
+            'available_in_response': len(records),
+        }
+    return compacted
+
+
+def extract_records(value: Any) -> list[dict[str, Any]] | None:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        for key in ['tasks', 'items', 'companies', 'contacts', 'deals', 'leads']:
+            items = value.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+    return None
+
+
+def first_record(value: Any) -> dict[str, Any] | None:
+    records = extract_records(value)
+    if records:
+        return records[0]
+    return None
+
+
+def user_display_name(user: dict[str, Any] | None) -> str | None:
+    if not user:
+        return None
+    name = ' '.join(
+        part.strip()
+        for part in [str(user.get('NAME') or ''), str(user.get('LAST_NAME') or '')]
+        if part and part.strip()
+    )
+    return name or user.get('EMAIL') or user.get('ID')
 
 
 def sanitize_for_json(value: Any) -> Any:
@@ -141,10 +192,11 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         toolsets=[docs_toolset],
         instructions=(
             f'You answer questions about one Bitrix24 account by using tools. Current model: {model_label}. '
-            'First inspect the Bitrix24 REST API documentation through the MCP documentation tools. '
-            'Then call Bitrix24 REST through the call_bitrix_rest tool with the method name and JSON parameters. '
+            'For CRM and task questions, prefer the typed CRM/task tools over raw REST calls. '
+            'Use documentation tools and call_bitrix_rest only when the typed tools cannot cover the request. '
             'Never answer with only a plan, pseudo-code, or suggested REST calls. '
-            'For account-data questions, you must execute call_bitrix_rest and answer from its result. '
+            'For account-data questions, you must execute at least one Bitrix24 tool and answer from its result. '
+            'For count questions, use count_crm_entities or count_tasks; do not paginate manually. '
             'For CRM contacts, the responsible user field is ASSIGNED_BY_ID. '
             'To answer who is responsible for a contact, find the contact with crm.contact.list selecting ASSIGNED_BY_ID, '
             'then call user.get for that user ID. '
@@ -164,6 +216,164 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         ),
     )
 
+    async def tracked_bitrix_call(ctx: RunContext[AgentDeps], method: str, params: dict[str, Any] | None = None) -> Any:
+        logfire.info('Calling Bitrix24 REST API', bitrix_method=method)
+        ctx.deps.bitrix_call_count += 1
+        return await ctx.deps.bitrix.call_method(method, params or {})
+
+    async def tracked_bitrix_count(ctx: RunContext[AgentDeps], method: str, params: dict[str, Any] | None = None) -> int:
+        logfire.info('Counting Bitrix24 REST list', bitrix_method=method)
+        ctx.deps.bitrix_call_count += 1
+        return await ctx.deps.bitrix.count_list_method(method, params or {})
+
+    @agent.tool
+    async def get_user_by_id(ctx: RunContext[AgentDeps], user_id: int) -> dict[str, Any]:
+        """Get one Bitrix24 user by numeric ID with compact identity fields."""
+        result = await tracked_bitrix_call(
+            ctx,
+            'user.get',
+            {'filter': {'ID': user_id}, 'select': ['ID', 'NAME', 'LAST_NAME', 'EMAIL']},
+        )
+        user = first_record(result)
+        if user is None:
+            return {'found': False, 'user_id': user_id}
+        return {'found': True, 'user': user}
+
+    @agent.tool
+    async def search_crm_companies(
+        ctx: RunContext[AgentDeps],
+        title: str,
+        exact: bool = True,
+        limit: int = 10,
+    ) -> Any:
+        """Find CRM companies by TITLE. Use for company questions."""
+        filter_key = '=TITLE' if exact else '%TITLE'
+        result = await tracked_bitrix_call(
+            ctx,
+            'crm.company.list',
+            {
+                'filter': {filter_key: title},
+                'select': ['ID', 'TITLE', 'ASSIGNED_BY_ID'],
+                'start': 0,
+            },
+        )
+        return compact_records(result, limit=max(1, min(limit, 20)))
+
+    @agent.tool
+    async def get_company_responsible(ctx: RunContext[AgentDeps], title: str) -> dict[str, Any]:
+        """Find a CRM company by exact TITLE and return its responsible user."""
+        companies = await tracked_bitrix_call(
+            ctx,
+            'crm.company.list',
+            {
+                'filter': {'=TITLE': title},
+                'select': ['ID', 'TITLE', 'ASSIGNED_BY_ID'],
+                'start': 0,
+            },
+        )
+        company = first_record(companies)
+        if company is None:
+            return {'found': False, 'company_title': title}
+
+        assigned_by_id = company.get('ASSIGNED_BY_ID')
+        if not assigned_by_id:
+            return {'found': True, 'company': company, 'responsible_found': False}
+
+        users = await tracked_bitrix_call(
+            ctx,
+            'user.get',
+            {
+                'filter': {'ID': int(assigned_by_id)},
+                'select': ['ID', 'NAME', 'LAST_NAME', 'EMAIL'],
+            },
+        )
+        user = first_record(users)
+        return {
+            'found': True,
+            'company': company,
+            'responsible_found': user is not None,
+            'responsible': user,
+            'responsible_name': user_display_name(user),
+        }
+
+    @agent.tool
+    async def search_crm_contacts(
+        ctx: RunContext[AgentDeps],
+        name: str,
+        limit: int = 10,
+    ) -> Any:
+        """Find CRM contacts by name fragment and include responsible user ID."""
+        result = await tracked_bitrix_call(
+            ctx,
+            'crm.contact.list',
+            {
+                'filter': {'%NAME': name},
+                'select': ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID'],
+                'start': 0,
+            },
+        )
+        return compact_records(result, limit=max(1, min(limit, 20)))
+
+    @agent.tool
+    async def search_crm_deals(
+        ctx: RunContext[AgentDeps],
+        title: str,
+        exact: bool = True,
+        limit: int = 10,
+    ) -> Any:
+        """Find CRM deals by TITLE and include amount, currency, stage, and responsible user."""
+        filter_key = '=TITLE' if exact else '%TITLE'
+        result = await tracked_bitrix_call(
+            ctx,
+            'crm.deal.list',
+            {
+                'filter': {filter_key: title},
+                'select': ['ID', 'TITLE', 'OPPORTUNITY', 'CURRENCY_ID', 'STAGE_ID', 'ASSIGNED_BY_ID'],
+                'start': 0,
+            },
+        )
+        return compact_records(result, limit=max(1, min(limit, 20)))
+
+    @agent.tool
+    async def count_crm_entities(
+        ctx: RunContext[AgentDeps],
+        entity: Literal['company', 'contact', 'deal', 'lead'],
+        filter: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Count CRM companies, contacts, deals, or leads using Bitrix24 total without pagination."""
+        method = CRM_ENTITY_METHODS[entity]
+        params = {'filter': filter or {}, 'select': ['ID'], 'start': 0}
+        total = await tracked_bitrix_count(ctx, method, params)
+        return {'entity': entity, 'filter': filter or {}, 'total': total}
+
+    @agent.tool
+    async def count_tasks(
+        ctx: RunContext[AgentDeps],
+        filter: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Count Bitrix24 tasks using total without pagination."""
+        params = {'filter': filter or {}, 'select': ['ID'], 'start': 0}
+        total = await tracked_bitrix_count(ctx, 'tasks.task.list', params)
+        return {'entity': 'task', 'filter': filter or {}, 'total': total}
+
+    @agent.tool
+    async def list_tasks(
+        ctx: RunContext[AgentDeps],
+        filter: dict[str, Any] | None = None,
+        limit: int = 10,
+    ) -> Any:
+        """List a compact page of Bitrix24 tasks. Use filters to keep the result small."""
+        result = await tracked_bitrix_call(
+            ctx,
+            'tasks.task.list',
+            {
+                'filter': filter or {},
+                'select': ['ID', 'TITLE', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE'],
+                'start': 0,
+            },
+        )
+        return compact_records(result, limit=max(1, min(limit, 20)))
+
     @agent.tool
     async def call_bitrix_rest(
         ctx: RunContext[AgentDeps],
@@ -176,16 +386,15 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             method: Exact Bitrix24 REST method name in dot notation, for example user.get, tasks.task.list, crm.deal.list.
             params: JSON parameters for this method. Keep responses small by using select/filter/order/start.
         """
-        logfire.info('Calling Bitrix24 REST API', bitrix_method=method)
-        ctx.deps.bitrix_call_count += 1
-        return await ctx.deps.bitrix.call_method(method, params or {})
+        result = await tracked_bitrix_call(ctx, method, params)
+        return compact_records(result, limit=20)
 
     @agent.output_validator
     async def require_bitrix_call(ctx: RunContext[AgentDeps], output: str) -> str:
         if ctx.deps.bitrix_call_count == 0:
             raise ModelRetry(
                 'You tried to answer without calling Bitrix24 REST. '
-                'Call call_bitrix_rest with a real Bitrix24 REST method first, then answer from the returned data. '
+                'Call a typed CRM/task tool or call_bitrix_rest first, then answer from the returned data. '
                 'Do not return a plan or example JSON.'
             )
         weak_answer_markers = [

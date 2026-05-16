@@ -73,6 +73,10 @@ class BitrixClient:
         self.transport = transport
 
     async def call_method(self, method: str, params: dict[str, Any] | None = None) -> Any:
+        payload = await self.call_method_payload(method, params)
+        return payload.get('result', payload) if isinstance(payload, dict) else payload
+
+    async def call_method_payload(self, method: str, params: dict[str, Any] | None = None) -> Any:
         method = method.strip()
         if not method:
             raise BitrixApiError('Bitrix24 method name is empty.')
@@ -98,7 +102,25 @@ class BitrixClient:
             message = payload.get('error_description') or payload['error']
             raise BitrixApiError(f'Bitrix24 API error: {message}')
 
-        return payload.get('result', payload) if isinstance(payload, dict) else payload
+        return payload
+
+    async def count_list_method(self, method: str, params: dict[str, Any] | None = None) -> int:
+        request_params = dict(params or {})
+        request_params.setdefault('select', ['ID'])
+        request_params.setdefault('start', 0)
+        payload = await self.call_method_payload(method, request_params)
+        if isinstance(payload, dict) and isinstance(payload.get('total'), int):
+            return payload['total']
+        result = payload.get('result') if isinstance(payload, dict) else payload
+        if isinstance(result, dict) and isinstance(result.get('total'), int):
+            return result['total']
+        if isinstance(result, list):
+            return len(result)
+        if isinstance(result, dict):
+            for value in result.values():
+                if isinstance(value, list):
+                    return len(value)
+        raise BitrixApiError(f'Bitrix24 did not return a countable list response for "{method}".')
 
     def _normalize_params(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         params = self._normalize_common_param_keys(params)
@@ -145,6 +167,16 @@ class BitrixClient:
         self._ensure_select_fields(params, ['ID', 'TITLE', 'ASSIGNED_BY_ID'])
 
     def _normalize_user_get_params(self, params: dict[str, Any]) -> None:
+        user_id = params.pop('USER_ID', None)
+        if user_id is None:
+            user_id = params.pop('user_id', None)
+        if user_id is None:
+            user_id = params.pop('ID', None)
+        if user_id is None:
+            user_id = params.pop('id', None)
+        if user_id is not None and 'filter' not in params:
+            params['filter'] = {'ID': int(user_id)}
+
         filter_ = params.get('filter')
         if isinstance(filter_, str):
             match = re.fullmatch(r'\s*ID\s*=\s*(\d+)\s*', filter_, flags=re.IGNORECASE)

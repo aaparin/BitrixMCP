@@ -130,6 +130,51 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, [])
 
+    async def test_normalizes_user_get_user_id_param(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.read().decode()
+            self.assertIn('"filter":{"ID":4}', body)
+            self.assertNotIn('"USER_ID"', body)
+            return httpx.Response(200, json={'result': [{'ID': '4'}]})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = await client.call_method(
+            'user.get',
+            {'USER_ID': 4},
+        )
+        self.assertEqual(result, [{'ID': '4'}])
+
+    async def test_count_list_method_uses_top_level_total(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.read().decode()
+            self.assertIn('"ID"', body)
+            self.assertIn('"start":0', body)
+            return httpx.Response(200, json={'result': [{'ID': '1'}], 'total': 123})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        total = await client.count_list_method('crm.company.list')
+        self.assertEqual(total, 123)
+
+    async def test_count_list_method_uses_nested_total(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={'result': {'tasks': [{'ID': '1'}], 'total': 42}})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        total = await client.count_list_method('tasks.task.list')
+        self.assertEqual(total, 42)
+
     async def test_blocks_write_method_before_http_call(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError('HTTP should not be called')
