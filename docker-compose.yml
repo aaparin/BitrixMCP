@@ -1,0 +1,15 @@
+services:
+  bitrix-mcp:
+    build: .
+    container_name: bitrix-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

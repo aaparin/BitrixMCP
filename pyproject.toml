@@ -1,0 +1,12 @@
+[project]
+name = "bitrixmcp"
+version = "0.1.0"
+description = "MCP server for Bitrix24"
+requires-python = ">=3.12"
+dependencies = [
+    "logfire>=4.33.0",
+    "pydantic-ai>=1.97.0",
+]
+
+[tool.logfire]
+ignore_no_config = true
