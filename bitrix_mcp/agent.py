@@ -43,6 +43,14 @@ CRM_ENTITY_METHODS = {
     'lead': 'crm.lead.list',
 }
 
+COMPACT_LIST_SELECTS = {
+    'crm.company.list': ['ID', 'TITLE', 'ASSIGNED_BY_ID'],
+    'crm.contact.list': ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID'],
+    'crm.deal.list': ['ID', 'TITLE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID'],
+    'crm.lead.list': ['ID', 'TITLE', 'STATUS_ID', 'ASSIGNED_BY_ID'],
+    'tasks.task.list': ['ID', 'TITLE', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE'],
+}
+
 
 def compact_records(value: Any, *, limit: int = 10) -> Any:
     records = extract_records(value)
@@ -96,10 +104,32 @@ def looks_like_raw_count_request(method: str, params: dict[str, Any] | None) -> 
     select = params.get('select') or params.get('SELECT')
     return (
         params.get('count') is True
+        or params.get('COUNT') is True
+        or params.get('count_only') is True
+        or params.get('COUNT_ONLY') in {True, 'Y', 'y', '1', 1}
         or params.get('total') is True
+        or params.get('TOTAL') is True
         or select == ['ID']
         or select == ['id']
     )
+
+
+def compact_raw_list_params(method: str, params: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = dict(params or {})
+    method = method.lower()
+    if method not in COMPACT_LIST_SELECTS:
+        return normalized
+
+    if 'FILTER' in normalized and 'filter' not in normalized:
+        normalized['filter'] = normalized.pop('FILTER')
+    if 'SELECT' in normalized and 'select' not in normalized:
+        normalized['select'] = normalized.pop('SELECT')
+    if 'ORDER' in normalized and 'order' not in normalized:
+        normalized['order'] = normalized.pop('ORDER')
+
+    normalized.setdefault('select', COMPACT_LIST_SELECTS[method].copy())
+    normalized.setdefault('start', 0)
+    return normalized
 
 
 def sanitize_for_json(value: Any) -> Any:
@@ -423,7 +453,7 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
                 'This is a count request. Use count_crm_entities for CRM counts or count_tasks for task counts. '
                 'When the count has conditions, pass them in the filter argument.'
             )
-        result = await tracked_bitrix_call(ctx, method, params)
+        result = await tracked_bitrix_call(ctx, method, compact_raw_list_params(method, params))
         return compact_records(result, limit=20)
 
     @agent.output_validator

@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from bitrix_mcp.agent import parse_openrouter_directive, should_retry_with_cloud
+from bitrix_mcp.agent import compact_raw_list_params, looks_like_raw_count_request, parse_openrouter_directive, should_retry_with_cloud
 from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_method
 from bitrix_mcp.cache import TTLCache
 from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
@@ -43,6 +43,24 @@ class AgentFallbackTests(unittest.TestCase):
 
     def test_weak_english_answer_triggers_fallback(self) -> None:
         self.assertTrue(should_retry_with_cloud('I need more information to answer this.'))
+
+    def test_detects_uppercase_count_only_raw_count_request(self) -> None:
+        self.assertTrue(
+            looks_like_raw_count_request(
+                'crm.deal.list',
+                {'COUNT_ONLY': 'Y', 'FILTER': {'STAGE_ID': 'WON'}, 'SELECT': ['ID']},
+            )
+        )
+
+    def test_compacts_raw_deal_list_params_without_select(self) -> None:
+        self.assertEqual(
+            compact_raw_list_params('crm.deal.list', {'FILTER': {'STATUS_ID': 'WON'}}),
+            {
+                'filter': {'STATUS_ID': 'WON'},
+                'select': ['ID', 'TITLE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID'],
+                'start': 0,
+            },
+        )
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
