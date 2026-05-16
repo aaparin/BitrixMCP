@@ -71,6 +71,26 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
         result = await client.call_method('crm.contact.list', {'select': ['ID', 'NAME']})
         self.assertEqual(result, [])
 
+    async def test_normalizes_company_list_name_to_title(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.read().decode()
+            self.assertIn('"=TITLE":"Dumbo - 1"', body)
+            self.assertNotIn('"NAME"', body)
+            self.assertIn('"TITLE"', body)
+            self.assertIn('"ASSIGNED_BY_ID"', body)
+            return httpx.Response(200, json={'result': []})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = await client.call_method(
+            'crm.company.list',
+            {'filter': {'NAME': 'Dumbo - 1'}, 'select': ['ID', 'NAME', 'ASSIGNED_BY_ID']},
+        )
+        self.assertEqual(result, [])
+
     async def test_blocks_write_method_before_http_call(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError('HTTP should not be called')

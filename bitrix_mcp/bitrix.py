@@ -100,12 +100,34 @@ class BitrixClient:
         return payload.get('result', payload) if isinstance(payload, dict) else payload
 
     def _normalize_params(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        if method.lower() == 'crm.contact.list':
-            select = params.get('select')
-            if isinstance(select, list):
-                for field in ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID']:
-                    if field not in select:
-                        select.append(field)
-            elif 'select' not in params:
-                params['select'] = ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID']
+        method = method.lower()
+        if method == 'crm.contact.list':
+            self._ensure_select_fields(params, ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID'])
+        elif method == 'crm.company.list':
+            self._normalize_company_list_params(params)
         return params
+
+    def _ensure_select_fields(self, params: dict[str, Any], fields: list[str]) -> None:
+        select = params.get('select')
+        if isinstance(select, list):
+            for field in fields:
+                if field not in select:
+                    select.append(field)
+        elif 'select' not in params:
+            params['select'] = fields.copy()
+
+    def _normalize_company_list_params(self, params: dict[str, Any]) -> None:
+        filter_ = params.get('filter')
+        if isinstance(filter_, dict):
+            name_value = None
+            for key in ['=NAME', 'NAME', '%NAME']:
+                if key in filter_:
+                    name_value = filter_.pop(key)
+                    break
+            if name_value is not None:
+                filter_['=TITLE'] = name_value
+
+        select = params.get('select')
+        if isinstance(select, list):
+            params['select'] = ['TITLE' if field == 'NAME' else field for field in select]
+        self._ensure_select_fields(params, ['ID', 'TITLE', 'ASSIGNED_BY_ID'])

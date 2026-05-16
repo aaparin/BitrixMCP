@@ -135,6 +135,9 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             'For CRM contacts, the responsible user field is ASSIGNED_BY_ID. '
             'To answer who is responsible for a contact, find the contact with crm.contact.list selecting ASSIGNED_BY_ID, '
             'then call user.get for that user ID. '
+            'For CRM companies, the display field is TITLE, not NAME. '
+            'To answer who is responsible for a company, find the company with crm.company.list using filter {"=TITLE": "..."} '
+            'and select ["ID", "TITLE", "ASSIGNED_BY_ID"], then call user.get for ASSIGNED_BY_ID. '
             'If the first API result misses a needed field, make another API call with a better select/filter instead of asking the user. '
             'Use only read-only API methods. Do not ask for or reveal tokens, webhook URLs, or credentials. '
             'If the question cannot be answered, explain the reason clearly. '
@@ -179,6 +182,8 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             'i need more information',
             'please provide',
             'i cannot access',
+            'looks like you',
+            '</think>',
             'cannot determine',
             'need to',
         ]
@@ -206,6 +211,9 @@ WEAK_ANSWER_MARKERS = [
     'i need more information',
     'please provide',
     'i cannot access',
+    'looks like you',
+    '</think>',
+    '<think>',
     'cannot determine',
     'need to',
     'configuration error',
