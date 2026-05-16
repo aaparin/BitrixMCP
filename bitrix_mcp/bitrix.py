@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urljoin
 
@@ -105,6 +106,8 @@ class BitrixClient:
             self._ensure_select_fields(params, ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID'])
         elif method == 'crm.company.list':
             self._normalize_company_list_params(params)
+        elif method == 'user.get':
+            self._normalize_user_get_params(params)
         return params
 
     def _ensure_select_fields(self, params: dict[str, Any], fields: list[str]) -> None:
@@ -131,3 +134,17 @@ class BitrixClient:
         if isinstance(select, list):
             params['select'] = ['TITLE' if field == 'NAME' else field for field in select]
         self._ensure_select_fields(params, ['ID', 'TITLE', 'ASSIGNED_BY_ID'])
+
+    def _normalize_user_get_params(self, params: dict[str, Any]) -> None:
+        filter_ = params.get('filter')
+        if isinstance(filter_, str):
+            match = re.fullmatch(r'\s*ID\s*=\s*(\d+)\s*', filter_, flags=re.IGNORECASE)
+            if match:
+                params['filter'] = {'ID': int(match.group(1))}
+        elif isinstance(filter_, dict):
+            for key in ['=ID', 'id', '=id']:
+                if key in filter_:
+                    filter_['ID'] = filter_.pop(key)
+                    break
+
+        self._ensure_select_fields(params, ['ID', 'NAME', 'LAST_NAME', 'EMAIL'])

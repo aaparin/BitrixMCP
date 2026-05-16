@@ -138,6 +138,8 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             'For CRM companies, the display field is TITLE, not NAME. '
             'To answer who is responsible for a company, find the company with crm.company.list using filter {"=TITLE": "..."} '
             'and select ["ID", "TITLE", "ASSIGNED_BY_ID"], then call user.get for ASSIGNED_BY_ID. '
+            'For user.get, params.filter must be an object such as {"ID": 456}, not a string like "ID=456". '
+            'For user.get, select ["ID", "NAME", "LAST_NAME", "EMAIL"]. '
             'If the first API result misses a needed field, make another API call with a better select/filter instead of asking the user. '
             'Use only read-only API methods. Do not ask for or reveal tokens, webhook URLs, or credentials. '
             'If the question cannot be answered, explain the reason clearly. '
