@@ -17,6 +17,7 @@ from pydantic_ai.usage import UsageLimits
 from bitrix_mcp.bitrix import BitrixApiError, BitrixClient, ReadOnlyViolation
 from bitrix_mcp.cache import TTLCache
 from bitrix_mcp.config import Settings
+from bitrix_mcp.crm_metadata import CrmFilterResolutionError, CrmMetadataResolver
 
 
 OPENROUTER_DIRECTIVES = (
@@ -85,47 +86,6 @@ def user_display_name(user: dict[str, Any] | None) -> str | None:
         if part and part.strip()
     )
     return name or user.get('EMAIL') or user.get('ID')
-
-
-def normalize_crm_count_filter(entity: str, filter_: dict[str, Any] | None) -> dict[str, Any]:
-    normalized = dict(filter_ or {})
-    if entity != 'deal':
-        return normalized
-
-    status = pop_first(normalized, ['status', 'STATUS', 'stage_status', 'semantic_status'])
-    if isinstance(status, str):
-        mapped_status = {
-            'won': 'S',
-            'success': 'S',
-            'successful': 'S',
-            'closed won': 'S',
-            'lost': 'F',
-            'failed': 'F',
-            'closed lost': 'F',
-            'open': 'P',
-            'in progress': 'P',
-            'active': 'P',
-        }.get(status.strip().lower())
-        if mapped_status:
-            normalized['STAGE_SEMANTIC_ID'] = mapped_status
-
-    year = pop_first(normalized, ['year', 'YEAR'])
-    if year is not None:
-        year_int = int(year)
-        if year_int < 2000 or year_int > 2100:
-            raise ValueError('Year must be between 2000 and 2100.')
-        date_field = str(pop_first(normalized, ['date_field', 'DATE_FIELD']) or 'CLOSEDATE')
-        normalized[f'>={date_field}'] = f'{year_int}-01-01'
-        normalized[f'<{date_field}'] = f'{year_int + 1}-01-01'
-
-    return normalized
-
-
-def pop_first(values: dict[str, Any], keys: list[str]) -> Any:
-    for key in keys:
-        if key in values:
-            return values.pop(key)
-    return None
 
 
 def looks_like_raw_count_request(method: str, params: dict[str, Any] | None) -> bool:
@@ -396,18 +356,24 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         ctx: RunContext[AgentDeps],
         entity: Literal['company', 'contact', 'deal', 'lead'],
         filter: dict[str, Any] | None = None,
+        conditions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Count CRM companies, contacts, deals, or leads using Bitrix24 total without pagination.
 
         Args:
             entity: CRM entity to count.
-            filter: Bitrix24 filter. For deals, common aliases are supported:
-                {"status": "won"} maps to {"STAGE_SEMANTIC_ID": "S"};
-                {"status": "lost"} maps to {"STAGE_SEMANTIC_ID": "F"};
-                {"year": 2026} maps to {">=CLOSEDATE": "2026-01-01", "<CLOSEDATE": "2027-01-01"}.
+            filter: Bitrix24 filter. Conditions can use human aliases such as
+                {"status": "won", "year": 2026}; the server resolves CRM fields
+                and dictionary values through cached Bitrix24 metadata.
+            conditions: Optional structured conditions, for example
+                [{"field": "status", "value": "won"}, {"field": "close date", "operator": "year", "value": 2026}].
         """
         method = CRM_ENTITY_METHODS[entity]
-        normalized_filter = normalize_crm_count_filter(entity, filter)
+        resolver = CrmMetadataResolver(ctx.deps.bitrix)
+        try:
+            normalized_filter = await resolver.resolve_filter(entity, filter=filter, conditions=conditions)
+        except CrmFilterResolutionError as exc:
+            raise ModelRetry(str(exc)) from exc
         params = {'filter': normalized_filter, 'select': ['ID'], 'start': 0}
         total = await tracked_bitrix_count(ctx, method, params)
         return {'entity': entity, 'filter': normalized_filter, 'total': total}

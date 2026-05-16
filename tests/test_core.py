@@ -4,9 +4,10 @@ import unittest
 
 import httpx
 
-from bitrix_mcp.agent import normalize_crm_count_filter, parse_openrouter_directive, should_retry_with_cloud
+from bitrix_mcp.agent import parse_openrouter_directive, should_retry_with_cloud
 from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_method
 from bitrix_mcp.cache import TTLCache
+from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
 
 
 class ReadOnlyMethodTests(unittest.TestCase):
@@ -42,25 +43,6 @@ class AgentFallbackTests(unittest.TestCase):
 
     def test_weak_english_answer_triggers_fallback(self) -> None:
         self.assertTrue(should_retry_with_cloud('I need more information to answer this.'))
-
-    def test_normalizes_deal_count_filter_aliases(self) -> None:
-        self.assertEqual(
-            normalize_crm_count_filter('deal', {'status': 'won', 'year': 2026}),
-            {
-                'STAGE_SEMANTIC_ID': 'S',
-                '>=CLOSEDATE': '2026-01-01',
-                '<CLOSEDATE': '2027-01-01',
-            },
-        )
-
-    def test_keeps_direct_deal_count_filter_fields(self) -> None:
-        self.assertEqual(
-            normalize_crm_count_filter(
-                'deal',
-                {'STAGE_SEMANTIC_ID': 'S', '>=CLOSEDATE': '2026-01-01', '<CLOSEDATE': '2027-01-01'},
-            ),
-            {'STAGE_SEMANTIC_ID': 'S', '>=CLOSEDATE': '2026-01-01', '<CLOSEDATE': '2027-01-01'},
-        )
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
@@ -205,6 +187,112 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ReadOnlyViolation):
             await client.call_method('crm.deal.add', {'fields': {'TITLE': 'test'}})
+
+
+class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        CRM_METADATA_CACHE._items.clear()
+
+    async def test_resolves_deal_count_filter_aliases(self) -> None:
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(lambda request: httpx.Response(500, json={'error': 'unexpected'})),
+        )
+
+        resolver = CrmMetadataResolver(client)
+        result = await resolver.resolve_filter('deal', filter={'status': 'won', 'year': 2026})
+
+        self.assertEqual(
+            result,
+            {
+                'STAGE_SEMANTIC_ID': 'S',
+                '>=CLOSEDATE': '2026-01-01',
+                '<CLOSEDATE': '2027-01-01',
+            },
+        )
+
+    async def test_resolves_bad_stage_id_won_to_deal_semantic(self) -> None:
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(lambda request: httpx.Response(500, json={'error': 'unexpected'})),
+        )
+
+        resolver = CrmMetadataResolver(client)
+        result = await resolver.resolve_filter(
+            'deal',
+            filter={'=STAGE_ID': 'WON', '>=CLOSE_DATE': '2026-01-01', '<=CLOSE_DATE': '2026-12-31'},
+        )
+
+        self.assertEqual(
+            result,
+            {
+                'STAGE_SEMANTIC_ID': 'S',
+                '>=CLOSEDATE': '2026-01-01',
+                '<=CLOSEDATE': '2026-12-31',
+            },
+        )
+
+    async def test_resolves_company_status_dictionary_value(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith('/crm.company.fields.json'):
+                return httpx.Response(
+                    200,
+                    json={'result': {'COMPANY_TYPE': {'type': 'crm_status', 'statusType': 'COMPANY_TYPE', 'title': 'Company type'}}},
+                )
+            if url.endswith('/crm.status.entity.types.json'):
+                return httpx.Response(200, json={'result': [{'ID': 'COMPANY_TYPE', 'ENTITY_TYPE_ID': 4}]})
+            if url.endswith('/crm.status.list.json'):
+                body = request.read().decode()
+                self.assertIn('"ENTITY_ID":"COMPANY_TYPE"', body)
+                return httpx.Response(200, json={'result': [{'STATUS_ID': 'CUSTOMER', 'NAME': 'Customer'}]})
+            raise AssertionError(f'Unexpected URL: {url}')
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        resolver = CrmMetadataResolver(client)
+        result = await resolver.resolve_filter('company', conditions=[{'field': 'type', 'value': 'Customer'}])
+
+        self.assertEqual(result, {'COMPANY_TYPE': 'CUSTOMER'})
+
+    async def test_resolves_status_field_by_value_when_field_hint_is_generic(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith('/crm.company.fields.json'):
+                return httpx.Response(
+                    200,
+                    json={
+                        'result': {
+                            'COMPANY_TYPE': {'type': 'crm_status', 'statusType': 'COMPANY_TYPE', 'title': 'Company type'},
+                            'INDUSTRY': {'type': 'crm_status', 'statusType': 'INDUSTRY', 'title': 'Industry'},
+                        }
+                    },
+                )
+            if url.endswith('/crm.status.entity.types.json'):
+                return httpx.Response(
+                    200,
+                    json={'result': [{'ID': 'COMPANY_TYPE', 'ENTITY_TYPE_ID': 4}, {'ID': 'INDUSTRY', 'ENTITY_TYPE_ID': 4}]},
+                )
+            if url.endswith('/crm.status.list.json'):
+                body = request.read().decode()
+                if '"ENTITY_ID":"COMPANY_TYPE"' in body:
+                    return httpx.Response(200, json={'result': [{'STATUS_ID': 'ACTIVE', 'NAME': 'Active'}]})
+                if '"ENTITY_ID":"INDUSTRY"' in body:
+                    return httpx.Response(200, json={'result': [{'STATUS_ID': 'IT', 'NAME': 'IT'}]})
+            raise AssertionError(f'Unexpected URL: {url}')
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+
+        resolver = CrmMetadataResolver(client)
+        result = await resolver.resolve_filter('company', conditions=[{'field': 'status', 'value': 'Active'}])
+
+        self.assertEqual(result, {'COMPANY_TYPE': 'ACTIVE'})
 
 
 if __name__ == '__main__':
