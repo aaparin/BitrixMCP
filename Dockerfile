@@ -14,6 +14,7 @@ RUN uv sync --frozen --no-dev
 
 COPY bitrix_mcp ./bitrix_mcp
 COPY main.py ./
+COPY scripts ./scripts
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV MCP_HOST="0.0.0.0"
