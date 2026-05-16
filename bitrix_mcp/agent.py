@@ -89,13 +89,26 @@ async def cached_docs_tool_call(
 
 
 def build_local_model(settings: Settings) -> OpenAIChatModel:
-    return OpenAIChatModel(
+    return LocalOpenAIChatModel(
         settings.local_llm_model,
         provider=OpenAIProvider(
             base_url=settings.local_llm_base_url,
             api_key=settings.local_llm_api_key,
         ),
     )
+
+
+class LocalOpenAIChatModel(OpenAIChatModel):
+    class _MapModelResponseContext(OpenAIChatModel._MapModelResponseContext):
+        def _into_message_param(self):
+            message_param = super()._into_message_param()
+            if (
+                message_param is not None
+                and message_param.get('content') is None
+                and message_param.get('tool_calls')
+            ):
+                message_param['content'] = ''
+            return message_param
 
 
 def build_cloud_model(settings: Settings) -> OpenRouterModel:
