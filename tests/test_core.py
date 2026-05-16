@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from bitrix_mcp.agent import parse_openrouter_directive, should_retry_with_cloud
+from bitrix_mcp.agent import normalize_crm_count_filter, parse_openrouter_directive, should_retry_with_cloud
 from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_method
 from bitrix_mcp.cache import TTLCache
 
@@ -42,6 +42,25 @@ class AgentFallbackTests(unittest.TestCase):
 
     def test_weak_english_answer_triggers_fallback(self) -> None:
         self.assertTrue(should_retry_with_cloud('I need more information to answer this.'))
+
+    def test_normalizes_deal_count_filter_aliases(self) -> None:
+        self.assertEqual(
+            normalize_crm_count_filter('deal', {'status': 'won', 'year': 2026}),
+            {
+                'STAGE_SEMANTIC_ID': 'S',
+                '>=CLOSEDATE': '2026-01-01',
+                '<CLOSEDATE': '2027-01-01',
+            },
+        )
+
+    def test_keeps_direct_deal_count_filter_fields(self) -> None:
+        self.assertEqual(
+            normalize_crm_count_filter(
+                'deal',
+                {'STAGE_SEMANTIC_ID': 'S', '>=CLOSEDATE': '2026-01-01', '<CLOSEDATE': '2027-01-01'},
+            ),
+            {'STAGE_SEMANTIC_ID': 'S', '>=CLOSEDATE': '2026-01-01', '<CLOSEDATE': '2027-01-01'},
+        )
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):

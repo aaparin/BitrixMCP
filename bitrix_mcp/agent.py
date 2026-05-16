@@ -87,6 +87,61 @@ def user_display_name(user: dict[str, Any] | None) -> str | None:
     return name or user.get('EMAIL') or user.get('ID')
 
 
+def normalize_crm_count_filter(entity: str, filter_: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = dict(filter_ or {})
+    if entity != 'deal':
+        return normalized
+
+    status = pop_first(normalized, ['status', 'STATUS', 'stage_status', 'semantic_status'])
+    if isinstance(status, str):
+        mapped_status = {
+            'won': 'S',
+            'success': 'S',
+            'successful': 'S',
+            'closed won': 'S',
+            'lost': 'F',
+            'failed': 'F',
+            'closed lost': 'F',
+            'open': 'P',
+            'in progress': 'P',
+            'active': 'P',
+        }.get(status.strip().lower())
+        if mapped_status:
+            normalized['STAGE_SEMANTIC_ID'] = mapped_status
+
+    year = pop_first(normalized, ['year', 'YEAR'])
+    if year is not None:
+        year_int = int(year)
+        if year_int < 2000 or year_int > 2100:
+            raise ValueError('Year must be between 2000 and 2100.')
+        date_field = str(pop_first(normalized, ['date_field', 'DATE_FIELD']) or 'CLOSEDATE')
+        normalized[f'>={date_field}'] = f'{year_int}-01-01'
+        normalized[f'<{date_field}'] = f'{year_int + 1}-01-01'
+
+    return normalized
+
+
+def pop_first(values: dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        if key in values:
+            return values.pop(key)
+    return None
+
+
+def looks_like_raw_count_request(method: str, params: dict[str, Any] | None) -> bool:
+    method = method.lower()
+    if method not in {*CRM_ENTITY_METHODS.values(), 'tasks.task.list'}:
+        return False
+    params = params or {}
+    select = params.get('select') or params.get('SELECT')
+    return (
+        params.get('count') is True
+        or params.get('total') is True
+        or select == ['ID']
+        or select == ['id']
+    )
+
+
 def sanitize_for_json(value: Any) -> Any:
     if isinstance(value, str):
         return value.encode('utf-8', errors='replace').decode('utf-8')
@@ -196,7 +251,9 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             'Use documentation tools and call_bitrix_rest only when the typed tools cannot cover the request. '
             'Never answer with only a plan, pseudo-code, or suggested REST calls. '
             'For account-data questions, you must execute at least one Bitrix24 tool and answer from its result. '
-            'For count questions, use count_crm_entities or count_tasks; do not paginate manually. '
+            'For CRM count questions, use count_crm_entities; when the count has conditions, pass them in filter. '
+            'For task count questions, use count_tasks; when the count has conditions, pass them in filter. '
+            'Do not paginate manually for count questions. '
             'For CRM contacts, the responsible user field is ASSIGNED_BY_ID. '
             'To answer who is responsible for a contact, find the contact with crm.contact.list selecting ASSIGNED_BY_ID, '
             'then call user.get for that user ID. '
@@ -340,11 +397,20 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         entity: Literal['company', 'contact', 'deal', 'lead'],
         filter: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Count CRM companies, contacts, deals, or leads using Bitrix24 total without pagination."""
+        """Count CRM companies, contacts, deals, or leads using Bitrix24 total without pagination.
+
+        Args:
+            entity: CRM entity to count.
+            filter: Bitrix24 filter. For deals, common aliases are supported:
+                {"status": "won"} maps to {"STAGE_SEMANTIC_ID": "S"};
+                {"status": "lost"} maps to {"STAGE_SEMANTIC_ID": "F"};
+                {"year": 2026} maps to {">=CLOSEDATE": "2026-01-01", "<CLOSEDATE": "2027-01-01"}.
+        """
         method = CRM_ENTITY_METHODS[entity]
-        params = {'filter': filter or {}, 'select': ['ID'], 'start': 0}
+        normalized_filter = normalize_crm_count_filter(entity, filter)
+        params = {'filter': normalized_filter, 'select': ['ID'], 'start': 0}
         total = await tracked_bitrix_count(ctx, method, params)
-        return {'entity': entity, 'filter': filter or {}, 'total': total}
+        return {'entity': entity, 'filter': normalized_filter, 'total': total}
 
     @agent.tool
     async def count_tasks(
@@ -386,6 +452,11 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             method: Exact Bitrix24 REST method name in dot notation, for example user.get, tasks.task.list, crm.deal.list.
             params: JSON parameters for this method. Keep responses small by using select/filter/order/start.
         """
+        if looks_like_raw_count_request(method, params):
+            raise ModelRetry(
+                'This is a count request. Use count_crm_entities for CRM counts or count_tasks for task counts. '
+                'When the count has conditions, pass them in the filter argument.'
+            )
         result = await tracked_bitrix_call(ctx, method, params)
         return compact_records(result, limit=20)
 
@@ -410,11 +481,15 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             '</think>',
             'cannot determine',
             'need to',
+            'truncated',
+            '20+',
         ]
         if ctx.deps.bitrix_call_count < 4 and any(marker in output.lower() for marker in weak_answer_markers):
             raise ModelRetry(
                 'The answer is incomplete. Do not ask the user to make API calls. '
                 'Make the missing Bitrix24 REST calls yourself. '
+                'For count questions, use count_crm_entities or count_tasks. '
+                'When the count has conditions, pass them in the filter argument. '
                 'For CRM contact responsible user, use crm.contact.list with ASSIGNED_BY_ID, then user.get.'
             )
         return output
