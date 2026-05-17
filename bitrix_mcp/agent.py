@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -49,6 +50,22 @@ COMPACT_LIST_SELECTS = {
     'crm.deal.list': ['ID', 'TITLE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID'],
     'crm.lead.list': ['ID', 'TITLE', 'STATUS_ID', 'ASSIGNED_BY_ID'],
     'tasks.task.list': ['ID', 'TITLE', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE'],
+}
+
+TASK_STATUS_ALIASES = {
+    'new': 1,
+    'pending': 2,
+    'accepted': 2,
+    'in_progress': 3,
+    'in progress': 3,
+    'active': 3,
+    'current': 3,
+    'almost completed': 4,
+    'awaiting review': 4,
+    'completed': 5,
+    'finished': 5,
+    'done': 5,
+    'deferred': 6,
 }
 
 
@@ -137,6 +154,36 @@ def dedupe_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def normalize_text(value: str) -> str:
     return ' '.join(value.strip().lower().split())
+
+
+def parse_filter_input(filter_value: dict[str, Any] | str | None) -> dict[str, Any]:
+    if filter_value is None:
+        return {}
+    if isinstance(filter_value, dict):
+        return dict(filter_value)
+    if isinstance(filter_value, str):
+        try:
+            parsed = json.loads(filter_value)
+        except json.JSONDecodeError as exc:
+            raise ModelRetry('Filter must be a JSON object, not a plain string.') from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ModelRetry('Filter must be an object.')
+
+
+def normalize_task_status_filter(status: str | int | None) -> dict[str, Any]:
+    if status is None:
+        return {}
+    if isinstance(status, int):
+        return {'STATUS': status}
+    normalized = normalize_text(status)
+    if normalized in {'open', 'not completed', 'non completed', 'not done'}:
+        return {'!STATUS': 5}
+    if normalized in TASK_STATUS_ALIASES:
+        return {'STATUS': TASK_STATUS_ALIASES[normalized]}
+    if status.isdigit():
+        return {'STATUS': int(status)}
+    return {'STATUS': status}
 
 
 def looks_like_raw_count_request(method: str, params: dict[str, Any] | None) -> bool:
@@ -471,21 +518,28 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
     @agent.tool
     async def count_tasks(
         ctx: RunContext[AgentDeps],
-        filter: dict[str, Any] | None = None,
+        filter: dict[str, Any] | str | None = None,
     ) -> dict[str, Any]:
         """Count Bitrix24 tasks using total without pagination."""
-        params = {'filter': filter or {}, 'select': ['ID'], 'start': 0}
+        parsed_filter = parse_filter_input(filter)
+        params = {'filter': parsed_filter, 'select': ['ID'], 'start': 0}
         total = await tracked_bitrix_count(ctx, 'tasks.task.list', params)
-        return {'entity': 'task', 'filter': filter or {}, 'total': total}
+        return {'entity': 'task', 'filter': parsed_filter, 'total': total}
 
     @agent.tool
     async def list_tasks_for_user(
         ctx: RunContext[AgentDeps],
         user_name: str,
-        status: str | None = None,
+        status: str | int | None = 'open',
         limit: int = 10,
     ) -> Any:
-        """List tasks where a named Bitrix24 employee/user is responsible."""
+        """List tasks where a named Bitrix24 employee/user is responsible.
+
+        Args:
+            user_name: Bitrix24 employee/user name or email.
+            status: Task status. Defaults to "open", meaning not completed. Use "completed" for finished tasks or None for all tasks.
+            limit: Maximum number of tasks to return.
+        """
         users_result = await search_users(ctx, user_name, limit=5)
         users = extract_records(users_result) or []
         if not users:
@@ -500,8 +554,7 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
 
         user = users[0]
         filter_: dict[str, Any] = {'RESPONSIBLE_ID': user['ID']}
-        if status:
-            filter_['STATUS'] = status
+        filter_.update(normalize_task_status_filter(status))
 
         tasks = await tracked_bitrix_call(
             ctx,
@@ -521,15 +574,16 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
     @agent.tool
     async def list_tasks(
         ctx: RunContext[AgentDeps],
-        filter: dict[str, Any] | None = None,
+        filter: dict[str, Any] | str | None = None,
         limit: int = 10,
     ) -> Any:
         """List a compact page of Bitrix24 tasks. Use filters to keep the result small."""
+        parsed_filter = parse_filter_input(filter)
         result = await tracked_bitrix_call(
             ctx,
             'tasks.task.list',
             {
-                'filter': filter or {},
+                'filter': parsed_filter,
                 'select': ['ID', 'TITLE', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE'],
                 'start': 0,
             },

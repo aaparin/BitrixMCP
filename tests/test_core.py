@@ -12,7 +12,9 @@ from bitrix_mcp.agent import (
     compact_raw_list_params,
     dedupe_users,
     looks_like_raw_count_request,
+    normalize_task_status_filter,
     parse_openrouter_directive,
+    parse_filter_input,
     should_retry_with_cloud,
     user_matches_query,
 )
@@ -114,6 +116,14 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
             dedupe_users([{'ID': '1', 'NAME': 'A'}, {'ID': '1', 'NAME': 'A'}, {'ID': '2', 'NAME': 'B'}]),
             [{'ID': '1', 'NAME': 'A'}, {'ID': '2', 'NAME': 'B'}],
         )
+
+    def test_parses_filter_json_string(self) -> None:
+        self.assertEqual(parse_filter_input('{"RESPONSIBLE_ID": 1099, "!STATUS": 5}'), {'RESPONSIBLE_ID': 1099, '!STATUS': 5})
+
+    def test_normalizes_open_task_status(self) -> None:
+        self.assertEqual(normalize_task_status_filter('open'), {'!STATUS': 5})
+        self.assertEqual(normalize_task_status_filter('completed'), {'STATUS': 5})
+        self.assertEqual(normalize_task_status_filter(None), {})
 
     async def test_force_openrouter_skips_local_model(self) -> None:
         calls: list[bool] = []
