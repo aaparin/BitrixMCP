@@ -16,6 +16,7 @@ from bitrix_mcp.agent import (
     parse_openrouter_directive,
     parse_conditions_input,
     parse_filter_input,
+    parse_params_input,
     should_retry_with_cloud,
     user_matches_query,
 )
@@ -120,6 +121,12 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
 
     def test_parses_filter_json_string(self) -> None:
         self.assertEqual(parse_filter_input('{"RESPONSIBLE_ID": 1099, "!STATUS": 5}'), {'RESPONSIBLE_ID': 1099, '!STATUS': 5})
+
+    def test_parses_rest_params_json_string(self) -> None:
+        self.assertEqual(
+            parse_params_input('{"filter": {"STAGE_SEMANTIC_ID": "S"}, "select": ["ID"], "start": 0}'),
+            {'filter': {'STAGE_SEMANTIC_ID': 'S'}, 'select': ['ID'], 'start': 0},
+        )
 
     def test_parses_conditions_json_string(self) -> None:
         self.assertEqual(

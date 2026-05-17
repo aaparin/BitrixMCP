@@ -171,6 +171,21 @@ def parse_filter_input(filter_value: dict[str, Any] | str | None) -> dict[str, A
     raise ModelRetry('Filter must be an object.')
 
 
+def parse_params_input(params_value: dict[str, Any] | str | None) -> dict[str, Any]:
+    if params_value is None:
+        return {}
+    if isinstance(params_value, dict):
+        return dict(params_value)
+    if isinstance(params_value, str):
+        try:
+            parsed = json.loads(params_value)
+        except json.JSONDecodeError as exc:
+            raise ModelRetry('REST params must be a JSON object, not a plain string.') from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ModelRetry('REST params must be an object.')
+
+
 def parse_conditions_input(conditions: list[dict[str, Any]] | str | None) -> list[dict[str, Any]]:
     if conditions is None:
         return []
@@ -613,7 +628,7 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
     async def call_bitrix_rest(
         ctx: RunContext[AgentDeps],
         method: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | str | None = None,
     ) -> Any:
         """Call a read-only Bitrix24 REST API method.
 
@@ -621,12 +636,13 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             method: Exact Bitrix24 REST method name in dot notation, for example user.get, tasks.task.list, crm.deal.list.
             params: JSON parameters for this method. Keep responses small by using select/filter/order/start.
         """
-        if looks_like_raw_count_request(method, params):
+        parsed_params = parse_params_input(params)
+        if looks_like_raw_count_request(method, parsed_params):
             raise ModelRetry(
                 'This is a count request. Use count_crm_entities for CRM counts or count_tasks for task counts. '
                 'When the count has conditions, pass them in the filter argument.'
             )
-        result = await tracked_bitrix_call(ctx, method, compact_raw_list_params(method, params))
+        result = await tracked_bitrix_call(ctx, method, compact_raw_list_params(method, parsed_params))
         return compact_records(result, limit=20)
 
     @agent.output_validator
