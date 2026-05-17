@@ -14,6 +14,7 @@ from bitrix_mcp.agent import (
     looks_like_raw_count_request,
     normalize_task_status_filter,
     parse_openrouter_directive,
+    parse_conditions_input,
     parse_filter_input,
     should_retry_with_cloud,
     user_matches_query,
@@ -119,6 +120,12 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
 
     def test_parses_filter_json_string(self) -> None:
         self.assertEqual(parse_filter_input('{"RESPONSIBLE_ID": 1099, "!STATUS": 5}'), {'RESPONSIBLE_ID': 1099, '!STATUS': 5})
+
+    def test_parses_conditions_json_string(self) -> None:
+        self.assertEqual(
+            parse_conditions_input('[{"field": "status", "value": "won"}]'),
+            [{'field': 'status', 'value': 'won'}],
+        )
 
     def test_normalizes_open_task_status(self) -> None:
         self.assertEqual(normalize_task_status_filter('open'), {'!STATUS': 5})

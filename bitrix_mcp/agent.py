@@ -171,6 +171,21 @@ def parse_filter_input(filter_value: dict[str, Any] | str | None) -> dict[str, A
     raise ModelRetry('Filter must be an object.')
 
 
+def parse_conditions_input(conditions: list[dict[str, Any]] | str | None) -> list[dict[str, Any]]:
+    if conditions is None:
+        return []
+    if isinstance(conditions, list):
+        return conditions
+    if isinstance(conditions, str):
+        try:
+            parsed = json.loads(conditions)
+        except json.JSONDecodeError as exc:
+            raise ModelRetry('Conditions must be a JSON array of objects, not a plain string.') from exc
+        if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+            return parsed
+    raise ModelRetry('Conditions must be an array of objects.')
+
+
 def normalize_task_status_filter(status: str | int | None) -> dict[str, Any]:
     if status is None:
         return {}
@@ -492,8 +507,8 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
     async def count_crm_entities(
         ctx: RunContext[AgentDeps],
         entity: Literal['company', 'contact', 'deal', 'lead'],
-        filter: dict[str, Any] | None = None,
-        conditions: list[dict[str, Any]] | None = None,
+        filter: dict[str, Any] | str | None = None,
+        conditions: list[dict[str, Any]] | str | None = None,
     ) -> dict[str, Any]:
         """Count CRM companies, contacts, deals, or leads using Bitrix24 total without pagination.
 
@@ -508,7 +523,11 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         method = CRM_ENTITY_METHODS[entity]
         resolver = CrmMetadataResolver(ctx.deps.bitrix)
         try:
-            normalized_filter = await resolver.resolve_filter(entity, filter=filter, conditions=conditions)
+            normalized_filter = await resolver.resolve_filter(
+                entity,
+                filter=parse_filter_input(filter),
+                conditions=parse_conditions_input(conditions),
+            )
         except CrmFilterResolutionError as exc:
             raise ModelRetry(str(exc)) from exc
         params = {'filter': normalized_filter, 'select': ['ID'], 'start': 0}
