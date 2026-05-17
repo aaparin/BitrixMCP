@@ -31,6 +31,7 @@ LOCAL_LLM_MODEL="gemma-4-e4b-it"
 LOCAL_LLM_API_KEY="api-key-not-set"
 OPENROUTER_API_KEY="..."
 OPENROUTER_MODEL="qwen/qwen3-32b"
+BITRIX_FORCE_OPENROUTER="false"
 BITRIX_DOCS_MCP_URL="https://mcp-dev.bitrix24.com/mcp"
 BITRIX_READ_ONLY="true"
 BITRIX_DOCS_CACHE_TTL_SECONDS="3600"
@@ -51,6 +52,12 @@ Exported shell variables have priority over `.env` values.
 Every request starts with the local OpenAI-compatible LLM. If the local model cannot complete the agent workflow, returns a weak answer, fails to build a useful Bitrix24 REST call, or hits the step limit, the same question is retried automatically with OpenRouter.
 
 `OPENROUTER_API_KEY` is optional. If it is missing, the server returns the local model result without fallback.
+
+To skip the local LLM for all requests, set:
+
+```dotenv
+BITRIX_FORCE_OPENROUTER="true"
+```
 
 To skip the local LLM for one request, prefix the question:
 

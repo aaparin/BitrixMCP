@@ -52,6 +52,7 @@ class Settings:
     docs_mcp_url: str
     openrouter_api_key: str
     openrouter_model: str
+    force_openrouter: bool
     local_llm_base_url: str
     local_llm_model: str
     local_llm_api_key: str
@@ -72,6 +73,7 @@ class Settings:
             docs_mcp_url=os.getenv('BITRIX_DOCS_MCP_URL', 'https://mcp-dev.bitrix24.com/mcp').strip(),
             openrouter_api_key=os.getenv('OPENROUTER_API_KEY', '').strip(),
             openrouter_model=os.getenv('OPENROUTER_MODEL', 'qwen/qwen3-32b').strip(),
+            force_openrouter=_env_bool('BITRIX_FORCE_OPENROUTER', False),
             local_llm_base_url=os.getenv(
                 'LOCAL_LLM_BASE_URL',
                 os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434/v1'),
@@ -96,6 +98,8 @@ class Settings:
             missing.append('LOCAL_LLM_BASE_URL')
         if not self.local_llm_model:
             missing.append('LOCAL_LLM_MODEL')
+        if self.force_openrouter and not self.openrouter_api_key:
+            missing.append('OPENROUTER_API_KEY')
         if not self.docs_mcp_url:
             missing.append('BITRIX_DOCS_MCP_URL')
         if missing:

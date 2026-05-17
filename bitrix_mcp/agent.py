@@ -96,6 +96,49 @@ def user_display_name(user: dict[str, Any] | None) -> str | None:
     return name or user.get('EMAIL') or user.get('ID')
 
 
+def user_matches_query(user: dict[str, Any], query: str) -> bool:
+    normalized_query = normalize_text(query)
+    values = [
+        user.get('NAME'),
+        user.get('LAST_NAME'),
+        user.get('EMAIL'),
+        user_display_name(user),
+    ]
+    normalized_values = [normalize_text(str(value)) for value in values if value]
+    return any(normalized_query in value or value in normalized_query for value in normalized_values)
+
+
+def build_user_search_filters(query: str) -> list[dict[str, Any]]:
+    parts = [part for part in query.strip().split() if part]
+    filters: list[dict[str, Any]] = []
+    if len(parts) >= 2:
+        first, last = parts[0], ' '.join(parts[1:])
+        filters.append({'NAME': first, 'LAST_NAME': last})
+        filters.append({'NAME': last, 'LAST_NAME': first})
+    if parts:
+        filters.append({'NAME': parts[0]})
+        filters.append({'LAST_NAME': parts[-1]})
+    if '@' in query:
+        filters.append({'EMAIL': query})
+    return filters or [{'NAME': query}]
+
+
+def dedupe_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for user in users:
+        user_id = str(user.get('ID') or '')
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        deduped.append(user)
+    return deduped
+
+
+def normalize_text(value: str) -> str:
+    return ' '.join(value.strip().lower().split())
+
+
 def looks_like_raw_count_request(method: str, params: dict[str, Any] | None) -> bool:
     method = method.lower()
     if method not in {*CRM_ENTITY_METHODS.values(), 'tasks.task.list'}:
@@ -244,6 +287,7 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
             'For CRM count questions, use count_crm_entities; when the count has conditions, pass them in filter. '
             'For task count questions, use count_tasks; when the count has conditions, pass them in filter. '
             'Do not paginate manually for count questions. '
+            'For task questions about a named employee or user, use list_tasks_for_user or search_users first; do not search CRM contacts. '
             'For CRM contacts, the responsible user field is ASSIGNED_BY_ID. '
             'To answer who is responsible for a contact, find the contact with crm.contact.list selecting ASSIGNED_BY_ID, '
             'then call user.get for that user ID. '
@@ -272,6 +316,22 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         logfire.info('Counting Bitrix24 REST list', bitrix_method=method)
         ctx.deps.bitrix_call_count += 1
         return await ctx.deps.bitrix.count_list_method(method, params or {})
+
+    @agent.tool
+    async def search_users(ctx: RunContext[AgentDeps], query: str, limit: int = 10) -> Any:
+        """Search Bitrix24 employees/users by name or email and return compact identity fields."""
+        users: list[dict[str, Any]] = []
+        for filter_ in build_user_search_filters(query):
+            result = await tracked_bitrix_call(
+                ctx,
+                'user.get',
+                {'filter': filter_, 'select': ['ID', 'NAME', 'LAST_NAME', 'EMAIL', 'ACTIVE']},
+            )
+            records = extract_records(result) or []
+            users.extend(user for user in records if user_matches_query(user, query))
+
+        users = dedupe_users(users)
+        return compact_records(users, limit=max(1, min(limit, 20)))
 
     @agent.tool
     async def get_user_by_id(ctx: RunContext[AgentDeps], user_id: int) -> dict[str, Any]:
@@ -419,6 +479,46 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
         return {'entity': 'task', 'filter': filter or {}, 'total': total}
 
     @agent.tool
+    async def list_tasks_for_user(
+        ctx: RunContext[AgentDeps],
+        user_name: str,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> Any:
+        """List tasks where a named Bitrix24 employee/user is responsible."""
+        users_result = await search_users(ctx, user_name, limit=5)
+        users = extract_records(users_result) or []
+        if not users:
+            return {'found': False, 'user_name': user_name, 'tasks': []}
+        if len(users) > 1:
+            return {
+                'found': False,
+                'ambiguous': True,
+                'user_name': user_name,
+                'candidates': users,
+            }
+
+        user = users[0]
+        filter_: dict[str, Any] = {'RESPONSIBLE_ID': user['ID']}
+        if status:
+            filter_['STATUS'] = status
+
+        tasks = await tracked_bitrix_call(
+            ctx,
+            'tasks.task.list',
+            {
+                'filter': filter_,
+                'select': ['ID', 'TITLE', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE'],
+                'start': 0,
+            },
+        )
+        return {
+            'found': True,
+            'user': user,
+            'tasks': compact_records(tasks, limit=max(1, min(limit, 20))),
+        }
+
+    @agent.tool
     async def list_tasks(
         ctx: RunContext[AgentDeps],
         filter: dict[str, Any] | None = None,
@@ -486,6 +586,7 @@ def build_agent(settings: Settings, *, use_cloud: bool = False) -> Agent[AgentDe
                 'Make the missing Bitrix24 REST calls yourself. '
                 'For count questions, use count_crm_entities or count_tasks. '
                 'When the count has conditions, pass them in the filter argument. '
+                'For task questions about a named employee or user, use search_users or list_tasks_for_user, not CRM contacts. '
                 'For CRM contact responsible user, use crm.contact.list with ASSIGNED_BY_ID, then user.get.'
             )
         return output
@@ -563,10 +664,14 @@ async def run_agent_once(question: str, settings: Settings, *, use_cloud: bool) 
 
 async def answer_question(question: str, settings: Settings) -> str:
     question, force_openrouter = parse_openrouter_directive(question)
-    if force_openrouter:
+    if settings.force_openrouter or force_openrouter:
         if not settings.openrouter_api_key:
-            return 'OpenRouter was requested explicitly, but OPENROUTER_API_KEY is not configured.'
-        logfire.info('Running ask_bitrix directly with OpenRouter by request directive')
+            return 'OpenRouter was requested explicitly or forced by config, but OPENROUTER_API_KEY is not configured.'
+        logfire.info(
+            'Running ask_bitrix directly with OpenRouter',
+            forced_by_config=settings.force_openrouter,
+            forced_by_directive=force_openrouter,
+        )
         return await run_agent_once(question, settings, use_cloud=True)
 
     local_answer = await run_agent_once(question, settings, use_cloud=False)

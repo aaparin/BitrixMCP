@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 
 import httpx
 
-from bitrix_mcp.agent import compact_raw_list_params, looks_like_raw_count_request, parse_openrouter_directive, should_retry_with_cloud
+from bitrix_mcp.agent import (
+    answer_question,
+    build_user_search_filters,
+    compact_raw_list_params,
+    dedupe_users,
+    looks_like_raw_count_request,
+    parse_openrouter_directive,
+    should_retry_with_cloud,
+    user_matches_query,
+)
 from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_method
 from bitrix_mcp.cache import TTLCache
+from bitrix_mcp.config import Settings
 from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
 
 
@@ -30,7 +42,27 @@ class TTLCacheTests(unittest.TestCase):
         self.assertEqual(cache.get(key), {'ok': True})
 
 
-class AgentFallbackTests(unittest.TestCase):
+class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
+    def settings(self) -> Settings:
+        return Settings(
+            bitrix_webhook_url='https://example.bitrix24.ru/rest/1/token/',
+            docs_mcp_url='https://mcp-dev.bitrix24.com/mcp',
+            openrouter_api_key='openrouter-key',
+            openrouter_model='openrouter/model',
+            force_openrouter=False,
+            local_llm_base_url='http://localhost:11434/v1',
+            local_llm_model='local-model',
+            local_llm_api_key='local-key',
+            host='127.0.0.1',
+            port=8000,
+            docs_cache_ttl_seconds=3600,
+            max_agent_steps=12,
+            request_timeout_seconds=20,
+            read_only=True,
+            logfire_enabled=False,
+            logfire_instrument_httpx=False,
+        )
+
     def test_parses_openrouter_directive(self) -> None:
         question, force_openrouter = parse_openrouter_directive('use openrouter: who is responsible?')
         self.assertEqual(question, 'who is responsible?')
@@ -61,6 +93,41 @@ class AgentFallbackTests(unittest.TestCase):
                 'start': 0,
             },
         )
+
+    def test_builds_user_search_filters_from_name(self) -> None:
+        self.assertEqual(
+            build_user_search_filters('Alex Minaev'),
+            [
+                {'NAME': 'Alex', 'LAST_NAME': 'Minaev'},
+                {'NAME': 'Minaev', 'LAST_NAME': 'Alex'},
+                {'NAME': 'Alex'},
+                {'LAST_NAME': 'Minaev'},
+            ],
+        )
+
+    def test_matches_user_query_by_display_name(self) -> None:
+        self.assertTrue(user_matches_query({'NAME': 'Aleksandrs', 'LAST_NAME': 'Minajevs'}, 'aleksandrs minajevs'))
+        self.assertFalse(user_matches_query({'NAME': 'Irina', 'LAST_NAME': 'Ostapko'}, 'alex minaev'))
+
+    def test_dedupes_users_by_id(self) -> None:
+        self.assertEqual(
+            dedupe_users([{'ID': '1', 'NAME': 'A'}, {'ID': '1', 'NAME': 'A'}, {'ID': '2', 'NAME': 'B'}]),
+            [{'ID': '1', 'NAME': 'A'}, {'ID': '2', 'NAME': 'B'}],
+        )
+
+    async def test_force_openrouter_skips_local_model(self) -> None:
+        calls: list[bool] = []
+
+        async def fake_run_agent_once(question: str, settings: Settings, *, use_cloud: bool) -> str:
+            calls.append(use_cloud)
+            return 'cloud answer' if use_cloud else 'local answer'
+
+        settings = replace(self.settings(), force_openrouter=True)
+        with patch('bitrix_mcp.agent.run_agent_once', fake_run_agent_once):
+            answer = await answer_question('question', settings)
+
+        self.assertEqual(answer, 'cloud answer')
+        self.assertEqual(calls, [True])
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
