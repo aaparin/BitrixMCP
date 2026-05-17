@@ -39,6 +39,8 @@ BITRIX_AGENT_MAX_STEPS="12"
 BITRIX_REQUEST_TIMEOUT_SECONDS="20"
 MCP_HOST="127.0.0.1"
 MCP_PORT="8000"
+MCP_TRANSPORT="sse"
+MCP_PATH="/sse"
 LOGFIRE_ENABLED="true"
 LOGFIRE_INSTRUMENT_HTTPX="false"
 ```
@@ -85,6 +87,19 @@ http://127.0.0.1:8000/sse
 
 Use that URL in Claude Desktop, Cursor, or another MCP client that supports remote/SSE servers.
 
+For the newer Streamable HTTP transport, set:
+
+```dotenv
+MCP_TRANSPORT="streamable-http"
+MCP_PATH="/mcp"
+```
+
+Then use:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
 ## Manual Test
 
 Run the same agent flow without an MCP client:
@@ -119,6 +134,12 @@ The container exposes:
 http://127.0.0.1:8000/sse
 ```
 
+If `MCP_TRANSPORT="streamable-http"` and `MCP_PATH="/mcp"` are set, the container exposes:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
 When the MCP server runs in Docker and LM Studio runs on the host machine, use this in `.env`:
 
 ```dotenv
@@ -138,6 +159,22 @@ For nginx reverse proxy, keep SSE buffering disabled, for example:
 ```nginx
 location /sse {
     proxy_pass http://127.0.0.1:8000/sse;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+}
+```
+
+For Streamable HTTP:
+
+```nginx
+location /mcp {
+    proxy_pass http://127.0.0.1:8000/mcp;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;

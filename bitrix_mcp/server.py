@@ -73,10 +73,10 @@ def main() -> None:
     configure_logfire(settings)
     server = create_server(settings)
     server.run(
-        transport='sse',
+        transport=settings.transport,
         host=settings.host,
         port=settings.port,
-        path='/sse',
+        path=settings.path,
     )
 
 

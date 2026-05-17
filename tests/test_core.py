@@ -59,6 +59,8 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
             local_llm_api_key='local-key',
             host='127.0.0.1',
             port=8000,
+            transport='sse',
+            path='/sse',
             docs_cache_ttl_seconds=3600,
             max_agent_steps=12,
             request_timeout_seconds=20,

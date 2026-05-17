@@ -58,6 +58,8 @@ class Settings:
     local_llm_api_key: str
     host: str
     port: int
+    transport: str
+    path: str
     docs_cache_ttl_seconds: int
     max_agent_steps: int
     request_timeout_seconds: float
@@ -68,6 +70,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         load_env_file()
+        transport = os.getenv('MCP_TRANSPORT', 'sse').strip().lower()
+        default_path = '/sse' if transport == 'sse' else '/mcp'
         return cls(
             bitrix_webhook_url=os.getenv('BITRIX_WEBHOOK_URL', '').strip(),
             docs_mcp_url=os.getenv('BITRIX_DOCS_MCP_URL', 'https://mcp-dev.bitrix24.com/mcp').strip(),
@@ -82,6 +86,8 @@ class Settings:
             local_llm_api_key=os.getenv('LOCAL_LLM_API_KEY', 'api-key-not-set').strip(),
             host=os.getenv('MCP_HOST', '127.0.0.1').strip(),
             port=_env_int('MCP_PORT', 8000),
+            transport=transport,
+            path=os.getenv('MCP_PATH', default_path).strip(),
             docs_cache_ttl_seconds=_env_int('BITRIX_DOCS_CACHE_TTL_SECONDS', 3600),
             max_agent_steps=_env_int('BITRIX_AGENT_MAX_STEPS', 12),
             request_timeout_seconds=float(os.getenv('BITRIX_REQUEST_TIMEOUT_SECONDS', '20')),
@@ -102,6 +108,10 @@ class Settings:
             missing.append('OPENROUTER_API_KEY')
         if not self.docs_mcp_url:
             missing.append('BITRIX_DOCS_MCP_URL')
+        if self.transport not in {'sse', 'http', 'streamable-http'}:
+            missing.append('MCP_TRANSPORT must be one of: sse, http, streamable-http')
+        if not self.path.startswith('/'):
+            missing.append('MCP_PATH must start with /')
         if missing:
             names = ', '.join(missing)
             raise RuntimeError(f'Missing required environment variables: {names}')
