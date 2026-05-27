@@ -60,6 +60,8 @@ class Settings:
     port: int
     transport: str
     path: str
+    bearer_token: str
+    public_base_url: str
     docs_cache_ttl_seconds: int
     max_agent_steps: int
     request_timeout_seconds: float
@@ -88,6 +90,8 @@ class Settings:
             port=_env_int('MCP_PORT', 8000),
             transport=transport,
             path=os.getenv('MCP_PATH', default_path).strip(),
+            bearer_token=os.getenv('MCP_BEARER_TOKEN', '').strip(),
+            public_base_url=os.getenv('MCP_PUBLIC_BASE_URL', '').strip(),
             docs_cache_ttl_seconds=_env_int('BITRIX_DOCS_CACHE_TTL_SECONDS', 3600),
             max_agent_steps=_env_int('BITRIX_AGENT_MAX_STEPS', 12),
             request_timeout_seconds=float(os.getenv('BITRIX_REQUEST_TIMEOUT_SECONDS', '20')),
@@ -112,6 +116,8 @@ class Settings:
             missing.append('MCP_TRANSPORT must be one of: sse, http, streamable-http')
         if not self.path.startswith('/'):
             missing.append('MCP_PATH must start with /')
+        if self.public_base_url and not self.public_base_url.startswith(('http://', 'https://')):
+            missing.append('MCP_PUBLIC_BASE_URL must start with http:// or https://')
         if missing:
             names = ', '.join(missing)
             raise RuntimeError(f'Missing required environment variables: {names}')

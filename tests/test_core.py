@@ -24,6 +24,8 @@ from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_meth
 from bitrix_mcp.cache import TTLCache
 from bitrix_mcp.config import Settings
 from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
+from bitrix_mcp.direct_tools import normalize_enum_items, parse_object_input, parse_string_list_input
+from bitrix_mcp.server import StaticBearerTokenVerifier
 
 
 class ReadOnlyMethodTests(unittest.TestCase):
@@ -46,6 +48,33 @@ class TTLCacheTests(unittest.TestCase):
         self.assertEqual(cache.get(key), {'ok': True})
 
 
+class DirectToolHelperTests(unittest.TestCase):
+    def test_parses_direct_rest_params_json_string(self) -> None:
+        self.assertEqual(parse_object_input('{"filter": {"ID": 1}}', name='params'), {'filter': {'ID': 1}})
+
+    def test_parses_string_list_json_or_csv(self) -> None:
+        self.assertEqual(parse_string_list_input('["LEAD", "DEAL"]', name='entities'), ['LEAD', 'DEAL'])
+        self.assertEqual(parse_string_list_input('LEAD, DEAL', name='entities'), ['LEAD', 'DEAL'])
+
+    def test_normalizes_enum_items(self) -> None:
+        self.assertEqual(
+            normalize_enum_items([{'ID': '1', 'VALUE': 'Active', 'XML_ID': 'A', 'EXTRA': 'ignore'}]),
+            [{'ID': '1', 'VALUE': 'Active', 'XML_ID': 'A'}],
+        )
+
+
+class StaticBearerTokenVerifierTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepts_expected_token(self) -> None:
+        verifier = StaticBearerTokenVerifier('secret')
+        token = await verifier.verify_token('secret')
+        self.assertIsNotNone(token)
+        self.assertEqual(token.client_id, 'static-bearer-token')
+
+    async def test_rejects_wrong_token(self) -> None:
+        verifier = StaticBearerTokenVerifier('secret')
+        self.assertIsNone(await verifier.verify_token('wrong'))
+
+
 class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
     def settings(self) -> Settings:
         return Settings(
@@ -61,6 +90,8 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
             port=8000,
             transport='sse',
             path='/sse',
+            bearer_token='',
+            public_base_url='',
             docs_cache_ttl_seconds=3600,
             max_agent_steps=12,
             request_timeout_seconds=20,

@@ -6,6 +6,10 @@ The server exposes:
 
 - `ask_bitrix(question: str)` - main tool.
 - `list_capabilities()` - short capability description for MCP clients.
+- `call_bitrix_rest(method, params)` - direct read-only Bitrix24 REST call without LLM planning.
+- `crm_userfield_lookup(entity, field_names, include_enums)` - compact lookup for CRM user fields by `FIELD_NAME`.
+- `crm_userfields_export(entities, include_enums)` - compact export of all CRM user fields for selected entities.
+- `crm_describe_fields(entities, fieldNames, includeEnums)` - compact CRM field description for static CRM entities and smart processes.
 
 Internally `ask_bitrix` uses a Pydantic AI agent with a local OpenAI-compatible LLM first, connects to the Bitrix24 documentation MCP server, then calls the configured Bitrix24 REST webhook in read-only mode. OpenRouter is used only as an automatic or explicit fallback.
 
@@ -41,6 +45,8 @@ MCP_HOST="127.0.0.1"
 MCP_PORT="8000"
 MCP_TRANSPORT="sse"
 MCP_PATH="/sse"
+MCP_BEARER_TOKEN=""
+MCP_PUBLIC_BASE_URL=""
 LOGFIRE_ENABLED="true"
 LOGFIRE_INSTRUMENT_HTTPX="false"
 ```
@@ -48,6 +54,29 @@ LOGFIRE_INSTRUMENT_HTTPX="false"
 Exported shell variables have priority over `.env` values.
 
 `LOGFIRE_INSTRUMENT_HTTPX` is disabled by default because Bitrix24 webhook tokens are part of the request URL. The server still logs safe Bitrix method names manually.
+
+## Authentication
+
+For public deployments, set a shared bearer token:
+
+```dotenv
+MCP_BEARER_TOKEN="change-this-long-random-token"
+MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
+```
+
+Clients must send:
+
+```http
+Authorization: Bearer change-this-long-random-token
+```
+
+For Codex-style MCP configuration, set the same token in the client environment and use `MCP_BEARER_TOKEN` as the bearer token environment variable. For Copilot Studio / Microsoft 365 Copilot connectors, use bearer/API-key authentication if available, or add a static header:
+
+```text
+Authorization: Bearer change-this-long-random-token
+```
+
+This is a shared service token, not per-user auth.
 
 ## LLM Fallback
 
@@ -119,6 +148,50 @@ Force OpenRouter in the manual script:
 ```bash
 uv run python scripts/ask.py "use openrouter: who is responsible for contact Qiusi Dong?"
 ```
+
+## Direct CRM Metadata Tools
+
+Use these when you need deterministic JSON for scripts or documentation updates.
+
+Lookup specific user fields:
+
+```json
+{
+  "tool": "crm_userfield_lookup",
+  "input": {
+    "entity": "DEAL",
+    "field_names": ["UF_CRM_1592556962319"],
+    "include_enums": true
+  }
+}
+```
+
+Describe fields across entities and smart processes:
+
+```json
+{
+  "tool": "crm_describe_fields",
+  "input": {
+    "entities": ["LEAD", "DEAL", "COMPANY", "QUOTE", "DYNAMIC_1032", "DYNAMIC_1036"],
+    "fieldNames": ["UF_CRM_1592556962319", "UF_CRM_1620652518"],
+    "includeEnums": true
+  }
+}
+```
+
+Export all user fields for selected entities:
+
+```json
+{
+  "tool": "crm_userfields_export",
+  "input": {
+    "entities": ["LEAD", "DEAL"],
+    "include_enums": true
+  }
+}
+```
+
+These tools call Bitrix24 REST directly and return JSON-compatible objects without Markdown formatting or final LLM prose.
 
 ## Docker
 
