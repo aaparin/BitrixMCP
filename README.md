@@ -6,6 +6,12 @@ The server exposes:
 
 - `ask_bitrix(question: str)` - main tool.
 - `list_capabilities()` - short capability description for MCP clients.
+- `crm_types_list(...)` - smart-process types and their `entityTypeId` values.
+- `crm_items_list(...)` / `crm_item_get(...)` - universal CRM reads for standard entities and smart processes.
+- `tasks_list(...)` / `task_get(...)` - task list and detail reads.
+- `activities_list(...)` / `activity_get(...)` - CRM activity list and detail reads.
+- `employees_list(...)` / `employee_get(...)` - employee/user reads.
+- `telephony_calls_list(...)` / `telephony_lines_list()` - call statistics and safe outgoing-line metadata.
 - `call_bitrix_rest(method, params)` - direct read-only Bitrix24 REST call without LLM planning.
 - `crm_userfield_lookup(entity, field_names, include_enums)` - compact lookup for CRM user fields by `FIELD_NAME`.
 - `crm_userfields_export(entities, include_enums)` - compact export of all CRM user fields for selected entities.
@@ -192,6 +198,64 @@ Export all user fields for selected entities:
 ```
 
 These tools call Bitrix24 REST directly and return JSON-compatible objects without Markdown formatting or final LLM prose.
+
+## Deterministic Read Tools
+
+Use the domain read tools instead of `ask_bitrix` when the caller already knows what data it needs.
+They return the original Bitrix24 payload, including `total` and `next` pagination metadata when available.
+All filters, selects, and order objects may be passed either as native JSON objects/arrays or as JSON strings.
+
+CRM accepts aliases such as `lead`, `deal`, `contact`, `company`, `quote`, and `invoice`,
+as well as numeric `entityTypeId` values and strings such as `DYNAMIC_1032`.
+Use `crm_types_list` to discover smart-process type IDs.
+
+```json
+{
+  "tool": "crm_items_list",
+  "input": {
+    "entity": "deal",
+    "filter": {"stageSemanticId": "S"},
+    "select": ["id", "title", "opportunity", "currencyId"],
+    "order": {"id": "DESC"},
+    "start": 0
+  }
+}
+```
+
+```json
+{
+  "tool": "tasks_list",
+  "input": {
+    "filter": {"RESPONSIBLE_ID": 7, "!STATUS": 5},
+    "order": {"DEADLINE": "ASC"},
+    "start": 0
+  }
+}
+```
+
+```json
+{
+  "tool": "activities_list",
+  "input": {
+    "filter": {"OWNER_TYPE_ID": 3, "OWNER_ID": 102},
+    "select": ["*", "COMMUNICATIONS"],
+    "order": {"ID": "DESC"}
+  }
+}
+```
+
+```json
+{
+  "tool": "telephony_calls_list",
+  "input": {
+    "filter": {">=CALL_START_DATE": "2026-01-01T00:00:00+02:00"},
+    "order": "DESC",
+    "start": 0
+  }
+}
+```
+
+No dedicated SIP configuration tool is provided because Bitrix24 includes SIP passwords in those responses.
 
 ## Docker
 

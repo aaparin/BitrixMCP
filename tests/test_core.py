@@ -25,6 +25,12 @@ from bitrix_mcp.cache import TTLCache
 from bitrix_mcp.config import Settings
 from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
 from bitrix_mcp.direct_tools import normalize_enum_items, parse_object_input, parse_string_list_input
+from bitrix_mcp.read_tools import (
+    crm_items_list_data,
+    resolve_crm_entity_type_id,
+    tasks_list_data,
+    telephony_calls_list_data,
+)
 from bitrix_mcp.server import StaticBearerTokenVerifier
 
 
@@ -61,6 +67,12 @@ class DirectToolHelperTests(unittest.TestCase):
             normalize_enum_items([{'ID': '1', 'VALUE': 'Active', 'XML_ID': 'A', 'EXTRA': 'ignore'}]),
             [{'ID': '1', 'VALUE': 'Active', 'XML_ID': 'A'}],
         )
+
+    def test_resolves_static_and_dynamic_crm_entity_types(self) -> None:
+        self.assertEqual(resolve_crm_entity_type_id('deal'), 2)
+        self.assertEqual(resolve_crm_entity_type_id('CRM_COMPANIES'), 4)
+        self.assertEqual(resolve_crm_entity_type_id('DYNAMIC_1032'), 1032)
+        self.assertEqual(resolve_crm_entity_type_id(1036), 1036)
 
 
 class StaticBearerTokenVerifierTests(unittest.IsolatedAsyncioTestCase):
@@ -329,6 +341,66 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ReadOnlyViolation):
             await client.call_method('crm.deal.add', {'fields': {'TITLE': 'test'}})
+
+    async def test_crm_items_list_uses_universal_read_method(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertTrue(str(request.url).endswith('/crm.item.list.json'))
+            body = request.read().decode()
+            self.assertIn('"entityTypeId":2', body)
+            self.assertIn('"useOriginalUfNames":"Y"', body)
+            self.assertIn('"filter":{"stageSemanticId":"S"}', body)
+            return httpx.Response(200, json={'result': {'items': []}, 'total': 0})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+        payload = await crm_items_list_data(
+            client,
+            'deal',
+            filter={'stageSemanticId': 'S'},
+        )
+        self.assertEqual(payload['total'], 0)
+
+    async def test_tasks_list_keeps_pagination_metadata(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertTrue(str(request.url).endswith('/tasks.task.list.json'))
+            body = request.read().decode()
+            self.assertIn('"RESPONSIBLE_ID":7', body)
+            self.assertIn('"DEADLINE"', body)
+            return httpx.Response(
+                200,
+                json={'result': {'tasks': [{'ID': '1'}], 'total': 25}, 'next': 50},
+            )
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+        payload = await tasks_list_data(client, filter={'RESPONSIBLE_ID': 7})
+        self.assertEqual(payload['result']['total'], 25)
+        self.assertEqual(payload['next'], 50)
+
+    async def test_telephony_call_list_preserves_required_uppercase_params(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertTrue(str(request.url).endswith('/voximplant.statistic.get.json'))
+            body = request.read().decode()
+            self.assertIn('"FILTER":{">=CALL_START_DATE":"2026-01-01"}', body)
+            self.assertIn('"SORT":"CALL_START_DATE"', body)
+            self.assertIn('"ORDER":"DESC"', body)
+            self.assertIn('"start":50', body)
+            return httpx.Response(200, json={'result': [], 'total': 0})
+
+        client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+        payload = await telephony_calls_list_data(
+            client,
+            filter={'>=CALL_START_DATE': '2026-01-01'},
+            start=50,
+        )
+        self.assertEqual(payload['total'], 0)
 
 
 class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):

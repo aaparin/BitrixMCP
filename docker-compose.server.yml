@@ -1,0 +1,23 @@
+services:
+  bitrix-mcp:
+    build: .
+    container_name: bitrix-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BITRIX_FORCE_OPENROUTER: "true"
+      BITRIX_READ_ONLY: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_TRANSPORT: streamable-http
+      MCP_PATH: /mcp
+      MCP_BEARER_TOKEN: ${MCP_BEARER_TOKEN}
+      LOGFIRE_ENABLED: "false"
+    networks:
+      - librechat
+
+networks:
+  librechat:
+    external: true
+    name: librechat_default

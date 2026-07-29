@@ -123,8 +123,11 @@ class BitrixClient:
         raise BitrixApiError(f'Bitrix24 did not return a countable list response for "{method}".')
 
     def _normalize_params(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        params = self._normalize_common_param_keys(params)
         method = method.lower()
+        if method.startswith('voximplant.'):
+            params = self._normalize_voximplant_param_keys(params)
+        else:
+            params = self._normalize_common_param_keys(params)
         if method == 'crm.contact.list':
             self._ensure_select_fields(params, ['ID', 'NAME', 'LAST_NAME', 'ASSIGNED_BY_ID'])
         elif method == 'crm.company.list':
@@ -132,6 +135,14 @@ class BitrixClient:
         elif method == 'user.get':
             self._normalize_user_get_params(params)
         return params
+
+    def _normalize_voximplant_param_keys(self, params: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(params)
+        for key in ['filter', 'sort', 'order']:
+            upper_key = key.upper()
+            if key in normalized and upper_key not in normalized:
+                normalized[upper_key] = normalized.pop(key)
+        return normalized
 
     def _normalize_common_param_keys(self, params: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(params)

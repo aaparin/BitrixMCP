@@ -19,6 +19,19 @@ from bitrix_mcp.direct_tools import (
     normalize_userfield,
     resolve_crm_entity,
 )
+from bitrix_mcp.read_tools import (
+    activities_list_data,
+    activity_get_data,
+    crm_item_get_data,
+    crm_items_list_data,
+    crm_types_list_data,
+    employee_get_data,
+    employees_list_data,
+    task_get_data,
+    tasks_list_data,
+    telephony_calls_list_data,
+    telephony_lines_list_data,
+)
 
 
 class StaticBearerTokenVerifier(TokenVerifier):
@@ -56,7 +69,8 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     server = FastMCP(
         name='Bitrix24 AI MCP',
         instructions=(
-            'Use ask_bitrix(question) to answer natural-language questions about the configured Bitrix24 account. '
+            'Prefer the deterministic read tools for CRM, tasks, activities, employees, and telephony. '
+            'Use ask_bitrix(question) only for natural-language questions that require multi-step reasoning. '
             'Send questions in English when possible. If another language is received, the server translates it '
             'internally and still answers in English. '
             'To force the stronger OpenRouter model for a single request, start the question with "use openrouter:". '
@@ -96,7 +110,9 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         mode = 'read-only' if settings.read_only else 'read-write'
         return (
             f'Bitrix24 AI MCP server ({mode}). '
-            'It answers English natural-language questions by consulting Bitrix24 REST API docs '
+            'It provides deterministic read tools for CRM items and types, tasks, CRM activities, '
+            'employees, and telephony calls and lines. It also answers English natural-language questions '
+            'by consulting Bitrix24 REST API docs '
             'through the configured documentation MCP server and then calling Bitrix24 REST API. '
             'Non-English questions are translated internally and answered in English. '
             'MVP domains: users, tasks, CRM, calendar, and other read-only REST methods available to the webhook. '
@@ -104,6 +120,152 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             'when the local model cannot complete the agent workflow. '
             'Prefix a question with "use openrouter:" to skip Ollama for that one request.'
         )
+
+    @server.tool
+    async def crm_types_list(
+        filter: dict[str, Any] | str | None = None,
+        order: dict[str, Any] | str | None = None,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """List smart-process CRM types and their entityTypeId values."""
+        return await crm_types_list_data(
+            bitrix_client(),
+            filter=filter,
+            order=order,
+            start=start,
+        )
+
+    @server.tool
+    async def crm_items_list(
+        entity: str | int,
+        filter: dict[str, Any] | str | None = None,
+        select: list[str] | str | None = None,
+        order: dict[str, Any] | str | None = None,
+        start: int = 0,
+        use_original_userfield_names: bool = True,
+    ) -> dict[str, Any]:
+        """List CRM items for leads, deals, contacts, companies, quotes, invoices, or smart processes.
+
+        Args:
+            entity: Entity alias, numeric entityTypeId, or DYNAMIC_<entityTypeId>.
+            filter: Bitrix24 crm.item.list filter object.
+            select: Fields to return. Use ["*"] to include multi-fields such as phones and email.
+            order: Sort object such as {"id": "DESC"}.
+            start: Non-negative pagination offset returned as next by Bitrix24.
+            use_original_userfield_names: Return custom fields as UF_CRM_* names.
+        """
+        return await crm_items_list_data(
+            bitrix_client(),
+            entity,
+            filter=filter,
+            select=select,
+            order=order,
+            start=start,
+            use_original_userfield_names=use_original_userfield_names,
+        )
+
+    @server.tool
+    async def crm_item_get(
+        entity: str | int,
+        item_id: int,
+        use_original_userfield_names: bool = True,
+    ) -> dict[str, Any]:
+        """Get one CRM item by entity alias/entityTypeId and item ID."""
+        return await crm_item_get_data(
+            bitrix_client(),
+            entity,
+            item_id,
+            use_original_userfield_names=use_original_userfield_names,
+        )
+
+    @server.tool
+    async def tasks_list(
+        filter: dict[str, Any] | str | None = None,
+        select: list[str] | str | None = None,
+        order: dict[str, Any] | str | None = None,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """List tasks with filters, selected fields, sorting, pagination, and total."""
+        return await tasks_list_data(
+            bitrix_client(),
+            filter=filter,
+            select=select,
+            order=order,
+            start=start,
+        )
+
+    @server.tool
+    async def task_get(
+        task_id: int,
+        select: list[str] | str | None = None,
+    ) -> dict[str, Any]:
+        """Get one task by numeric ID."""
+        return await task_get_data(bitrix_client(), task_id, select=select)
+
+    @server.tool
+    async def activities_list(
+        filter: dict[str, Any] | str | None = None,
+        select: list[str] | str | None = None,
+        order: dict[str, Any] | str | None = None,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """List CRM activities such as calls, emails, meetings, and to-dos."""
+        return await activities_list_data(
+            bitrix_client(),
+            filter=filter,
+            select=select,
+            order=order,
+            start=start,
+        )
+
+    @server.tool
+    async def activity_get(activity_id: int) -> dict[str, Any]:
+        """Get one CRM activity by numeric ID."""
+        return await activity_get_data(bitrix_client(), activity_id)
+
+    @server.tool
+    async def employees_list(
+        filter: dict[str, Any] | str | None = None,
+        select: list[str] | str | None = None,
+        sort: str = 'ID',
+        order: str = 'ASC',
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """List Bitrix24 employees/users with filtering, sorting, and pagination."""
+        return await employees_list_data(
+            bitrix_client(),
+            filter=filter,
+            select=select,
+            sort=sort,
+            order=order,
+            start=start,
+        )
+
+    @server.tool
+    async def employee_get(employee_id: int) -> dict[str, Any]:
+        """Get one Bitrix24 employee/user by numeric ID."""
+        return await employee_get_data(bitrix_client(), employee_id)
+
+    @server.tool
+    async def telephony_calls_list(
+        filter: dict[str, Any] | str | None = None,
+        sort: str = 'CALL_START_DATE',
+        order: str = 'DESC',
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """List telephony call statistics with filtering, sorting, pagination, and total."""
+        return await telephony_calls_list_data(
+            bitrix_client(),
+            filter=filter,
+            sort=sort,
+            order=order,
+            start=start,
+        )
+
+    @server.tool
+    async def telephony_lines_list() -> dict[str, Any]:
+        """List available outgoing telephony lines without exposing SIP credentials."""
+        return await telephony_lines_list_data(bitrix_client())
 
     @server.tool
     async def call_bitrix_rest(method: str, params: dict[str, Any] | str | None = None) -> dict[str, Any]:
