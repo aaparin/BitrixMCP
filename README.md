@@ -77,6 +77,8 @@ Other optional settings: `BITRIX_METHOD_CATALOG_PATH`, `BITRIX_PORTAL_METHODS_TT
 
 ## Per-user OAuth writes
 
+See the full production checklist: [docs/deploy.md](docs/deploy.md).
+
 Reads stay on the inbound webhook. Writes run as the LibreChat user after a one-time
 browser consent. LibreChat must send the authenticated user email in
 `X-Bitrix-User-Email` (or `BITRIX_USER_EMAIL_HEADER`).
@@ -98,13 +100,15 @@ BITRIX_OAUTH_ENABLED="true"
 BITRIX_OAUTH_CLIENT_ID="..."
 BITRIX_OAUTH_CLIENT_SECRET="..."
 BITRIX_PORTAL_URL="https://example.bitrix24.ru"
-BITRIX_MEMBER_ID="..."
 BITRIX_TOKEN_DB_PATH="/data/tokens.db"
 BITRIX_TOKEN_ENCRYPTION_KEY="..."   # Fernet key
 BITRIX_ALLOWED_ACCESS="read,write"
 MCP_BEARER_TOKEN="required-when-oauth-on"
 MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
 ```
+
+Portal `member_id` is learned from the first successful OAuth response and stored in
+SQLite — it is not an env variable.
 
 Generate an encryption key:
 

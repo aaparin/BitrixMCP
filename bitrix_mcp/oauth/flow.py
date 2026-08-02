@@ -31,7 +31,6 @@ class OAuthFlow:
         client_id: str,
         client_secret: str,
         portal_url: str,
-        member_id: str,
         store: TokenStore,
         wait_registry: AuthWaitRegistry,
         auth_state_ttl_seconds: int = 900,
@@ -39,7 +38,6 @@ class OAuthFlow:
         self.client_id = client_id
         self.client_secret = client_secret
         self.portal_url = portal_url.rstrip('/')
-        self.member_id = member_id
         self.store = store
         self.wait_registry = wait_registry
         self.auth_state_ttl_seconds = auth_state_ttl_seconds
@@ -95,7 +93,21 @@ class OAuthFlow:
             scope=scope,
         )
 
+    async def member_id_allowed(self, member_id: str) -> bool:
+        """True if this portal is acceptable (matches pin, or nothing pinned yet)."""
+        member_id = (member_id or '').strip()
+        if not member_id:
+            return False
+        pinned = await asyncio.to_thread(self.store.get_pinned_member_id)
+        return pinned is None or pinned == member_id
+
+    async def accept_member_id(self, member_id: str) -> bool:
+        """Pin portal member_id on first auth; reject mismatches afterwards."""
+        return await asyncio.to_thread(self.store.pin_or_check_member_id, member_id)
+
     async def save_verified_token(self, *, email: str, payload: OAuthTokenPayload) -> StoredToken:
+        if not await self.accept_member_id(payload.member_id):
+            raise RuntimeError('Bitrix24 member_id does not match the pinned portal.')
         return await asyncio.to_thread(
             self.store.save_token,
             member_id=payload.member_id,

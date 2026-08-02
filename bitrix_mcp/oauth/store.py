@@ -118,8 +118,55 @@ class TokenStore:
                     outcome TEXT NOT NULL,
                     error TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS portal_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    member_id TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 """
             )
+            self._backfill_pinned_member_id(conn)
+
+    def _backfill_pinned_member_id(self, conn: sqlite3.Connection) -> None:
+        pinned = conn.execute('SELECT member_id FROM portal_settings WHERE id = 1').fetchone()
+        if pinned is not None:
+            return
+        row = conn.execute(
+            """
+            SELECT member_id FROM oauth_tokens
+            WHERE status = 'active' AND member_id != ''
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute(
+            'INSERT INTO portal_settings (id, member_id, updated_at) VALUES (1, ?, ?)',
+            (row['member_id'], int(time.time())),
+        )
+
+    def get_pinned_member_id(self) -> str | None:
+        with self._db() as conn:
+            row = conn.execute('SELECT member_id FROM portal_settings WHERE id = 1').fetchone()
+        return str(row['member_id']) if row else None
+
+    def pin_or_check_member_id(self, member_id: str) -> bool:
+        """Pin portal on first successful auth. Later calls must match the pin."""
+        member_id = (member_id or '').strip()
+        if not member_id:
+            return False
+        now = int(time.time())
+        with self._db() as conn:
+            row = conn.execute('SELECT member_id FROM portal_settings WHERE id = 1').fetchone()
+            if row is None:
+                conn.execute(
+                    'INSERT INTO portal_settings (id, member_id, updated_at) VALUES (1, ?, ?)',
+                    (member_id, now),
+                )
+                return True
+            return str(row['member_id']) == member_id
 
     def _encrypt(self, value: str) -> bytes:
         return self._fernet.encrypt(value.encode('utf-8'))
@@ -202,16 +249,28 @@ class TokenStore:
             status=status,
         )
 
-    def get_by_email(self, member_id: str, email: str) -> StoredToken | None:
+    def get_by_email(self, email: str, member_id: str | None = None) -> StoredToken | None:
         email_n = self.normalize_email(email)
+        pinned = member_id or self.get_pinned_member_id()
         with self._db() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM oauth_tokens
-                WHERE member_id = ? AND email = ? AND status = 'active'
-                """,
-                (member_id, email_n),
-            ).fetchone()
+            if pinned:
+                row = conn.execute(
+                    """
+                    SELECT * FROM oauth_tokens
+                    WHERE member_id = ? AND email = ? AND status = 'active'
+                    """,
+                    (pinned, email_n),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM oauth_tokens
+                    WHERE email = ? AND status = 'active'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (email_n,),
+                ).fetchone()
         return self._row_to_token(row) if row else None
 
     def get_by_user_id(self, member_id: str, bitrix_user_id: int) -> StoredToken | None:
@@ -237,18 +296,29 @@ class TokenStore:
                 (now, member_id, bitrix_user_id),
             )
 
-    def revoke_by_email(self, member_id: str, email: str) -> bool:
+    def revoke_by_email(self, email: str, member_id: str | None = None) -> bool:
         email_n = self.normalize_email(email)
+        pinned = member_id or self.get_pinned_member_id()
         now = int(time.time())
         with self._db() as conn:
-            cur = conn.execute(
-                """
-                UPDATE oauth_tokens
-                SET status = 'revoked', updated_at = ?
-                WHERE member_id = ? AND email = ? AND status = 'active'
-                """,
-                (now, member_id, email_n),
-            )
+            if pinned:
+                cur = conn.execute(
+                    """
+                    UPDATE oauth_tokens
+                    SET status = 'revoked', updated_at = ?
+                    WHERE member_id = ? AND email = ? AND status = 'active'
+                    """,
+                    (now, pinned, email_n),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    UPDATE oauth_tokens
+                    SET status = 'revoked', updated_at = ?
+                    WHERE email = ? AND status = 'active'
+                    """,
+                    (now, email_n),
+                )
             return cur.rowcount > 0
 
     def _row_to_token(self, row: sqlite3.Row) -> StoredToken:

@@ -30,13 +30,11 @@ class IdentityResolver:
         self,
         *,
         webhook_url: str,
-        member_id: str,
         store: TokenStore | None,
         refresh: RefreshCoordinator | None,
         oauth_enabled: bool,
     ):
         self.webhook_url = webhook_url
-        self.member_id = member_id
         self.store = store
         self.refresh = refresh
         self.oauth_enabled = oauth_enabled
@@ -47,7 +45,7 @@ class IdentityResolver:
             return ResolvedIdentity(identity=self._webhook, email=email, mode='webhook')
 
         email_n = TokenStore.normalize_email(email)
-        token = await asyncio.to_thread(self.store.get_by_email, self.member_id, email_n)
+        token = await asyncio.to_thread(self.store.get_by_email, email_n)
         if token is None:
             return ResolvedIdentity(identity=self._webhook, email=email_n, mode='webhook')
 

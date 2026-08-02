@@ -60,7 +60,7 @@ def register_oauth_routes(
     async def oauth_callback(request: Request) -> HTMLResponse:
         code = (request.query_params.get('code') or '').strip()
         state = (request.query_params.get('state') or '').strip()
-        member_id = (request.query_params.get('member_id') or '').strip()
+        query_member_id = (request.query_params.get('member_id') or '').strip()
 
         if not state:
             return _page('Authorization failed', '<p>Missing state parameter.</p>', ok=False)
@@ -76,10 +76,10 @@ def register_oauth_routes(
         if not code:
             return _page('Authorization failed', '<p>Missing authorization code.</p>', ok=False)
 
-        if member_id and member_id != flow.member_id:
+        if query_member_id and not await flow.member_id_allowed(query_member_id):
             return _page(
                 'Authorization failed',
-                '<p>This portal does not match the configured Bitrix24 member.</p>',
+                '<p>This portal does not match the Bitrix24 portal already linked to this server.</p>',
                 ok=False,
             )
 
@@ -92,10 +92,10 @@ def register_oauth_routes(
                 ok=False,
             )
 
-        if payload.member_id and payload.member_id != flow.member_id:
+        if not payload.member_id or not await flow.member_id_allowed(payload.member_id):
             return _page(
                 'Authorization failed',
-                '<p>This portal does not match the configured Bitrix24 member.</p>',
+                '<p>This portal does not match the Bitrix24 portal already linked to this server.</p>',
                 ok=False,
             )
 
@@ -106,7 +106,7 @@ def register_oauth_routes(
 
         temp_identity = OAuthIdentity(
             email=auth_state.email,
-            member_id=payload.member_id or flow.member_id,
+            member_id=payload.member_id,
             bitrix_user_id=payload.user_id,
             client_endpoint=payload.client_endpoint,
             access_token=payload.access_token,
@@ -149,7 +149,14 @@ def register_oauth_routes(
                 ok=False,
             )
 
-        await flow.save_verified_token(email=auth_state.email, payload=payload)
+        try:
+            await flow.save_verified_token(email=auth_state.email, payload=payload)
+        except RuntimeError:
+            return _page(
+                'Authorization failed',
+                '<p>This portal does not match the Bitrix24 portal already linked to this server.</p>',
+                ok=False,
+            )
         await wait_registry.signal(state)
         display = html.escape(profile_display_name(profile) or auth_state.email)
         return _page(
@@ -183,10 +190,19 @@ def register_oauth_routes(
                 '<p>Bitrix24 did not provide placement tokens. Open the app from the portal menu.</p>',
                 ok=False,
             )
-        if member_id and member_id != flow.member_id:
+
+        pinned = await asyncio.to_thread(store.get_pinned_member_id)
+        resolved_member_id = member_id or (pinned or '')
+        if not resolved_member_id:
             return _page(
                 'Connection failed',
-                '<p>This portal does not match the configured Bitrix24 member.</p>',
+                '<p>Bitrix24 did not provide member_id. Open the app from the portal menu.</p>',
+                ok=False,
+            )
+        if not await flow.member_id_allowed(resolved_member_id):
+            return _page(
+                'Connection failed',
+                '<p>This portal does not match the Bitrix24 portal already linked to this server.</p>',
                 ok=False,
             )
 
@@ -199,13 +215,17 @@ def register_oauth_routes(
         except ValueError:
             expires_in = 3600
         expires_at = int(time.time()) + max(expires_in, 60)
-        client_endpoint = f'https://{domain}/rest/' if domain and not domain.startswith('http') else (domain.rstrip('/') + '/rest/' if domain else '')
+        client_endpoint = (
+            f'https://{domain}/rest/'
+            if domain and not domain.startswith('http')
+            else (domain.rstrip('/') + '/rest/' if domain else '')
+        )
         if not client_endpoint:
             return _page('Connection failed', '<p>Missing portal domain in placement data.</p>', ok=False)
 
         temp_identity = OAuthIdentity(
             email='placement@unknown',
-            member_id=member_id or flow.member_id,
+            member_id=resolved_member_id,
             bitrix_user_id=0,
             client_endpoint=client_endpoint,
             access_token=auth_id,
@@ -222,9 +242,15 @@ def register_oauth_routes(
                     '<p>Could not determine your Bitrix24 user profile.</p>',
                     ok=False,
                 )
+            if not await flow.accept_member_id(resolved_member_id):
+                return _page(
+                    'Connection failed',
+                    '<p>This portal does not match the Bitrix24 portal already linked to this server.</p>',
+                    ok=False,
+                )
             await asyncio.to_thread(
                 store.save_token,
-                member_id=member_id or flow.member_id,
+                member_id=resolved_member_id,
                 bitrix_user_id=user_id,
                 email=email,
                 access_token=auth_id,

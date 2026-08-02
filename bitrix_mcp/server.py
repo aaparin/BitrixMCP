@@ -126,7 +126,6 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
             portal_url=settings.portal_url,
-            member_id=settings.member_id,
             store=store,
             wait_registry=wait_registry,
             auth_state_ttl_seconds=settings.auth_state_ttl_seconds,
@@ -153,7 +152,6 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     )
     resolver = IdentityResolver(
         webhook_url=settings.bitrix_webhook_url,
-        member_id=settings.member_id,
         store=store,
         refresh=refresh,
         oauth_enabled=settings.oauth_enabled,
@@ -645,7 +643,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
                 'error': 'identity_missing',
                 'message': f'Missing {settings.user_email_header} header.',
             }
-        token = await asyncio.to_thread(store.get_by_email, settings.member_id, email)
+        token = await asyncio.to_thread(store.get_by_email, email)
         if token is None:
             return {'revoked': False, 'email': email, 'message': 'No active token found for this user.'}
         await asyncio.to_thread(store.mark_revoked, token.member_id, token.bitrix_user_id)

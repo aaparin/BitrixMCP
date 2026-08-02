@@ -122,7 +122,6 @@ class Settings:
     oauth_client_id: str
     oauth_client_secret: str
     portal_url: str
-    member_id: str
     user_email_header: str
     token_db_path: str
     token_encryption_key: str
@@ -160,7 +159,6 @@ class Settings:
             oauth_client_id=os.getenv('BITRIX_OAUTH_CLIENT_ID', '').strip(),
             oauth_client_secret=os.getenv('BITRIX_OAUTH_CLIENT_SECRET', '').strip(),
             portal_url=os.getenv('BITRIX_PORTAL_URL', '').strip(),
-            member_id=os.getenv('BITRIX_MEMBER_ID', '').strip(),
             user_email_header=os.getenv('BITRIX_USER_EMAIL_HEADER', 'X-Bitrix-User-Email').strip()
             or 'X-Bitrix-User-Email',
             token_db_path=os.getenv('BITRIX_TOKEN_DB_PATH', '/data/tokens.db').strip() or '/data/tokens.db',
@@ -209,8 +207,6 @@ class Settings:
                 missing.append('BITRIX_PORTAL_URL')
             elif not self.portal_url.startswith(('http://', 'https://')):
                 missing.append('BITRIX_PORTAL_URL must start with http:// or https://')
-            if not self.member_id:
-                missing.append('BITRIX_MEMBER_ID')
             if not self.token_encryption_key:
                 missing.append('BITRIX_TOKEN_ENCRYPTION_KEY')
             if not self.public_base_url:
