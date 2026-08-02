@@ -178,11 +178,26 @@ def register_oauth_routes(
             )
 
         form = await request.form()
+        query = request.query_params
         auth_id = str(form.get('AUTH_ID') or '').strip()
         refresh_id = str(form.get('REFRESH_ID') or '').strip()
-        member_id = str(form.get('member_id') or form.get('MEMBER_ID') or '').strip()
-        domain = str(form.get('DOMAIN') or form.get('domain') or '').strip()
-        auth_expires = str(form.get('AUTH_EXPIRES') or '3600').strip()
+        member_id = str(
+            form.get('member_id')
+            or form.get('MEMBER_ID')
+            or query.get('member_id')
+            or query.get('MEMBER_ID')
+            or ''
+        ).strip()
+        domain = str(
+            form.get('DOMAIN')
+            or form.get('domain')
+            or query.get('DOMAIN')
+            or query.get('domain')
+            or ''
+        ).strip()
+        auth_expires = str(
+            form.get('AUTH_EXPIRES') or query.get('AUTH_EXPIRES') or '3600'
+        ).strip()
 
         if not auth_id or not refresh_id:
             return _page(
