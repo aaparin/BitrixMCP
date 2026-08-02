@@ -8,8 +8,8 @@ services:
     environment:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
-      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./bitrix_mcp:/app/bitrix_mcp
+      - ./main.py:/app/main.py

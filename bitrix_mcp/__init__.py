@@ -1,2 +1,5 @@
-"""MCP server for answering Bitrix24 questions with Pydantic AI."""
+"""Bitrix24 MCP server package."""
 
+__all__ = ['__version__']
+
+__version__ = '0.1.0'

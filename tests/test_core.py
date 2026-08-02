@@ -1,49 +1,23 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
-from unittest.mock import patch
 
 import httpx
 
-from bitrix_mcp.agent import (
-    answer_question,
-    build_user_search_filters,
-    compact_raw_list_params,
-    dedupe_users,
-    looks_like_raw_count_request,
-    normalize_task_status_filter,
-    parse_openrouter_directive,
-    parse_conditions_input,
-    parse_filter_input,
-    parse_params_input,
-    should_retry_with_cloud,
-    user_matches_query,
-)
-from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation, is_read_only_method
+from bitrix_mcp.bitrix import BitrixClient, ReadOnlyViolation
 from bitrix_mcp.cache import TTLCache
-from bitrix_mcp.config import Settings
-from bitrix_mcp.crm_metadata import CRM_METADATA_CACHE, CrmMetadataResolver
-from bitrix_mcp.direct_tools import normalize_enum_items, parse_object_input, parse_string_list_input
+from bitrix_mcp.crm_metadata import CrmMetadataResolver
+from bitrix_mcp.crm_statuses import CRM_STATUSES_CACHE
+from bitrix_mcp.direct_tools import normalize_enum_items, parse_object_input, parse_object_list_input, parse_string_list_input
+from bitrix_mcp.people_tools import build_user_search_filters, dedupe_users, user_matches_query
 from bitrix_mcp.read_tools import (
     crm_items_list_data,
+    normalize_task_status_filter,
     resolve_crm_entity_type_id,
     tasks_list_data,
     telephony_calls_list_data,
 )
 from bitrix_mcp.server import StaticBearerTokenVerifier
-
-
-class ReadOnlyMethodTests(unittest.TestCase):
-    def test_allows_common_read_methods(self) -> None:
-        self.assertTrue(is_read_only_method('user.get'))
-        self.assertTrue(is_read_only_method('tasks.task.list'))
-        self.assertTrue(is_read_only_method('crm.deal.fields'))
-
-    def test_blocks_write_methods(self) -> None:
-        self.assertFalse(is_read_only_method('crm.deal.add'))
-        self.assertFalse(is_read_only_method('tasks.task.update'))
-        self.assertFalse(is_read_only_method('batch'))
 
 
 class TTLCacheTests(unittest.TestCase):
@@ -53,6 +27,12 @@ class TTLCacheTests(unittest.TestCase):
         cache.set(key, {'ok': True})
         self.assertEqual(cache.get(key), {'ok': True})
 
+    def test_scoped_keys_differ(self) -> None:
+        cache = TTLCache(ttl_seconds=60)
+        a = cache.make_key('fields', {}, scope='portal-a')
+        b = cache.make_key('fields', {}, scope='portal-b')
+        self.assertNotEqual(a, b)
+
 
 class DirectToolHelperTests(unittest.TestCase):
     def test_parses_direct_rest_params_json_string(self) -> None:
@@ -61,6 +41,12 @@ class DirectToolHelperTests(unittest.TestCase):
     def test_parses_string_list_json_or_csv(self) -> None:
         self.assertEqual(parse_string_list_input('["LEAD", "DEAL"]', name='entities'), ['LEAD', 'DEAL'])
         self.assertEqual(parse_string_list_input('LEAD, DEAL', name='entities'), ['LEAD', 'DEAL'])
+
+    def test_parses_object_list_json_string(self) -> None:
+        self.assertEqual(
+            parse_object_list_input('[{"field": "status", "value": "won"}]', name='conditions'),
+            [{'field': 'status', 'value': 'won'}],
+        )
 
     def test_normalizes_enum_items(self) -> None:
         self.assertEqual(
@@ -75,74 +61,7 @@ class DirectToolHelperTests(unittest.TestCase):
         self.assertEqual(resolve_crm_entity_type_id(1036), 1036)
 
 
-class StaticBearerTokenVerifierTests(unittest.IsolatedAsyncioTestCase):
-    async def test_accepts_expected_token(self) -> None:
-        verifier = StaticBearerTokenVerifier('secret')
-        token = await verifier.verify_token('secret')
-        self.assertIsNotNone(token)
-        self.assertEqual(token.client_id, 'static-bearer-token')
-
-    async def test_rejects_wrong_token(self) -> None:
-        verifier = StaticBearerTokenVerifier('secret')
-        self.assertIsNone(await verifier.verify_token('wrong'))
-
-
-class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
-    def settings(self) -> Settings:
-        return Settings(
-            bitrix_webhook_url='https://example.bitrix24.ru/rest/1/token/',
-            docs_mcp_url='https://mcp-dev.bitrix24.com/mcp',
-            openrouter_api_key='openrouter-key',
-            openrouter_model='openrouter/model',
-            force_openrouter=False,
-            local_llm_base_url='http://localhost:11434/v1',
-            local_llm_model='local-model',
-            local_llm_api_key='local-key',
-            host='127.0.0.1',
-            port=8000,
-            transport='sse',
-            path='/sse',
-            bearer_token='',
-            public_base_url='',
-            docs_cache_ttl_seconds=3600,
-            max_agent_steps=12,
-            request_timeout_seconds=20,
-            read_only=True,
-            logfire_enabled=False,
-            logfire_instrument_httpx=False,
-        )
-
-    def test_parses_openrouter_directive(self) -> None:
-        question, force_openrouter = parse_openrouter_directive('use openrouter: who is responsible?')
-        self.assertEqual(question, 'who is responsible?')
-        self.assertTrue(force_openrouter)
-
-    def test_plain_question_does_not_force_openrouter(self) -> None:
-        question, force_openrouter = parse_openrouter_directive('who is responsible?')
-        self.assertEqual(question, 'who is responsible?')
-        self.assertFalse(force_openrouter)
-
-    def test_weak_english_answer_triggers_fallback(self) -> None:
-        self.assertTrue(should_retry_with_cloud('I need more information to answer this.'))
-
-    def test_detects_uppercase_count_only_raw_count_request(self) -> None:
-        self.assertTrue(
-            looks_like_raw_count_request(
-                'crm.deal.list',
-                {'COUNT_ONLY': 'Y', 'FILTER': {'STAGE_ID': 'WON'}, 'SELECT': ['ID']},
-            )
-        )
-
-    def test_compacts_raw_deal_list_params_without_select(self) -> None:
-        self.assertEqual(
-            compact_raw_list_params('crm.deal.list', {'FILTER': {'STATUS_ID': 'WON'}}),
-            {
-                'filter': {'STATUS_ID': 'WON'},
-                'select': ['ID', 'TITLE', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'CLOSEDATE', 'OPPORTUNITY', 'CURRENCY_ID'],
-                'start': 0,
-            },
-        )
-
+class PeopleToolHelperTests(unittest.TestCase):
     def test_builds_user_search_filters_from_name(self) -> None:
         self.assertEqual(
             build_user_search_filters('Alex Minaev'),
@@ -164,53 +83,41 @@ class AgentFallbackTests(unittest.IsolatedAsyncioTestCase):
             [{'ID': '1', 'NAME': 'A'}, {'ID': '2', 'NAME': 'B'}],
         )
 
-    def test_parses_filter_json_string(self) -> None:
-        self.assertEqual(parse_filter_input('{"RESPONSIBLE_ID": 1099, "!STATUS": 5}'), {'RESPONSIBLE_ID': 1099, '!STATUS': 5})
-
-    def test_parses_rest_params_json_string(self) -> None:
-        self.assertEqual(
-            parse_params_input('{"filter": {"STAGE_SEMANTIC_ID": "S"}, "select": ["ID"], "start": 0}'),
-            {'filter': {'STAGE_SEMANTIC_ID': 'S'}, 'select': ['ID'], 'start': 0},
-        )
-
-    def test_parses_conditions_json_string(self) -> None:
-        self.assertEqual(
-            parse_conditions_input('[{"field": "status", "value": "won"}]'),
-            [{'field': 'status', 'value': 'won'}],
-        )
-
     def test_normalizes_open_task_status(self) -> None:
         self.assertEqual(normalize_task_status_filter('open'), {'!STATUS': 5})
         self.assertEqual(normalize_task_status_filter('completed'), {'STATUS': 5})
         self.assertEqual(normalize_task_status_filter(None), {})
 
-    async def test_force_openrouter_skips_local_model(self) -> None:
-        calls: list[bool] = []
 
-        async def fake_run_agent_once(question: str, settings: Settings, *, use_cloud: bool) -> str:
-            calls.append(use_cloud)
-            return 'cloud answer' if use_cloud else 'local answer'
+class StaticBearerTokenVerifierTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepts_expected_token(self) -> None:
+        verifier = StaticBearerTokenVerifier('secret')
+        token = await verifier.verify_token('secret')
+        self.assertIsNotNone(token)
+        self.assertEqual(token.client_id, 'static-bearer-token')
 
-        settings = replace(self.settings(), force_openrouter=True)
-        with patch('bitrix_mcp.agent.run_agent_once', fake_run_agent_once):
-            answer = await answer_question('question', settings)
-
-        self.assertEqual(answer, 'cloud answer')
-        self.assertEqual(calls, [True])
+    async def test_rejects_wrong_token(self) -> None:
+        verifier = StaticBearerTokenVerifier('secret')
+        self.assertIsNone(await verifier.verify_token('wrong'))
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        for name in list(self.__dict__):
+            value = getattr(self, name)
+            if isinstance(value, BitrixClient):
+                await value.aclose()
+
     async def test_returns_result_field(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(str(request.url), 'https://example.bitrix24.ru/rest/1/token/user.get.json')
             return httpx.Response(200, json={'result': [{'ID': '1'}]})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method('user.get', {'select': ['ID']})
+        result = await self.client.call_method('user.get', {'select': ['ID']})
         self.assertEqual(result, [{'ID': '1'}])
 
     async def test_adds_contact_responsible_field_to_contact_list(self) -> None:
@@ -218,12 +125,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('ASSIGNED_BY_ID', request.read().decode())
             return httpx.Response(200, json={'result': []})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method('crm.contact.list', {'select': ['ID', 'NAME']})
+        result = await self.client.call_method('crm.contact.list', {'select': ['ID', 'NAME']})
         self.assertEqual(result, [])
 
     async def test_normalizes_company_list_name_to_title(self) -> None:
@@ -235,12 +141,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"ASSIGNED_BY_ID"', body)
             return httpx.Response(200, json={'result': []})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method(
+        result = await self.client.call_method(
             'crm.company.list',
             {'filter': {'NAME': 'Dumbo - 1'}, 'select': ['ID', 'NAME', 'ASSIGNED_BY_ID']},
         )
@@ -255,12 +160,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"SELECT"', body)
             return httpx.Response(200, json={'result': []})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method(
+        result = await self.client.call_method(
             'crm.company.list',
             {'FILTER': {'NAME': 'Dumbo - 1'}, 'SELECT': ['ID']},
         )
@@ -274,12 +178,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"EMAIL"', body)
             return httpx.Response(200, json={'result': []})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method(
+        result = await self.client.call_method(
             'user.get',
             {'filter': 'ID=456', 'select': ['ID', 'NAME']},
         )
@@ -292,15 +195,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"USER_ID"', body)
             return httpx.Response(200, json={'result': [{'ID': '4'}]})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        result = await client.call_method(
-            'user.get',
-            {'USER_ID': 4},
-        )
+        result = await self.client.call_method('user.get', {'USER_ID': 4})
         self.assertEqual(result, [{'ID': '4'}])
 
     async def test_count_list_method_uses_top_level_total(self) -> None:
@@ -310,37 +209,46 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"start":0', body)
             return httpx.Response(200, json={'result': [{'ID': '1'}], 'total': 123})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        total = await client.count_list_method('crm.company.list')
+        total = await self.client.count_list_method('crm.company.list')
         self.assertEqual(total, 123)
 
     async def test_count_list_method_uses_nested_total(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={'result': {'tasks': [{'ID': '1'}], 'total': 42}})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        total = await client.count_list_method('tasks.task.list')
+        total = await self.client.count_list_method('tasks.task.list')
         self.assertEqual(total, 42)
 
     async def test_blocks_write_method_before_http_call(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError('HTTP should not be called')
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
         with self.assertRaises(ReadOnlyViolation):
-            await client.call_method('crm.deal.add', {'fields': {'TITLE': 'test'}})
+            await self.client.call_method('crm.deal.add', {'fields': {'TITLE': 'test'}})
+
+    async def test_allows_methods_discovery_endpoint(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertTrue(str(request.url).endswith('/methods.json'))
+            return httpx.Response(200, json={'result': ['user.get']})
+
+        self.client = BitrixClient(
+            'https://example.bitrix24.ru/rest/1/token/',
+            transport=httpx.MockTransport(handler),
+        )
+        result = await self.client.call_method('methods', {})
+        self.assertEqual(result, ['user.get'])
 
     async def test_crm_items_list_uses_universal_read_method(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -351,15 +259,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"filter":{"stageSemanticId":"S"}', body)
             return httpx.Response(200, json={'result': {'items': []}, 'total': 0})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-        payload = await crm_items_list_data(
-            client,
-            'deal',
-            filter={'stageSemanticId': 'S'},
-        )
+        payload = await crm_items_list_data(self.client, 'deal', filter={'stageSemanticId': 'S'})
         self.assertEqual(payload['total'], 0)
 
     async def test_tasks_list_keeps_pagination_metadata(self) -> None:
@@ -373,11 +277,11 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
                 json={'result': {'tasks': [{'ID': '1'}], 'total': 25}, 'next': 50},
             )
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-        payload = await tasks_list_data(client, filter={'RESPONSIBLE_ID': 7})
+        payload = await tasks_list_data(self.client, filter={'RESPONSIBLE_ID': 7})
         self.assertEqual(payload['result']['total'], 25)
         self.assertEqual(payload['next'], 50)
 
@@ -391,12 +295,12 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"start":50', body)
             return httpx.Response(200, json={'result': [], 'total': 0})
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
         payload = await telephony_calls_list_data(
-            client,
+            self.client,
             filter={'>=CALL_START_DATE': '2026-01-01'},
             start=50,
         )
@@ -405,17 +309,20 @@ class BitrixClientTests(unittest.IsolatedAsyncioTestCase):
 
 class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        CRM_METADATA_CACHE._items.clear()
+        self.cache = TTLCache(ttl_seconds=60)
+        CRM_STATUSES_CACHE.clear()
+
+    async def asyncTearDown(self) -> None:
+        if hasattr(self, 'client'):
+            await self.client.aclose()
 
     async def test_resolves_deal_count_filter_aliases(self) -> None:
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(lambda request: httpx.Response(500, json={'error': 'unexpected'})),
         )
-
-        resolver = CrmMetadataResolver(client)
+        resolver = CrmMetadataResolver(self.client, cache=self.cache)
         result = await resolver.resolve_filter('deal', filter={'status': 'won', 'year': 2026})
-
         self.assertEqual(
             result,
             {
@@ -426,17 +333,15 @@ class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_resolves_bad_stage_id_won_to_deal_semantic(self) -> None:
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(lambda request: httpx.Response(500, json={'error': 'unexpected'})),
         )
-
-        resolver = CrmMetadataResolver(client)
+        resolver = CrmMetadataResolver(self.client, cache=self.cache)
         result = await resolver.resolve_filter(
             'deal',
             filter={'=STAGE_ID': 'WON', '>=CLOSE_DATE': '2026-01-01', '<=CLOSE_DATE': '2026-12-31'},
         )
-
         self.assertEqual(
             result,
             {
@@ -462,14 +367,12 @@ class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={'result': [{'STATUS_ID': 'CUSTOMER', 'NAME': 'Customer'}]})
             raise AssertionError(f'Unexpected URL: {url}')
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        resolver = CrmMetadataResolver(client)
+        resolver = CrmMetadataResolver(self.client, cache=self.cache)
         result = await resolver.resolve_filter('company', conditions=[{'field': 'type', 'value': 'Customer'}])
-
         self.assertEqual(result, {'COMPANY_TYPE': 'CUSTOMER'})
 
     async def test_resolves_status_field_by_value_when_field_hint_is_generic(self) -> None:
@@ -498,14 +401,12 @@ class CrmMetadataResolverTests(unittest.IsolatedAsyncioTestCase):
                     return httpx.Response(200, json={'result': [{'STATUS_ID': 'IT', 'NAME': 'IT'}]})
             raise AssertionError(f'Unexpected URL: {url}')
 
-        client = BitrixClient(
+        self.client = BitrixClient(
             'https://example.bitrix24.ru/rest/1/token/',
             transport=httpx.MockTransport(handler),
         )
-
-        resolver = CrmMetadataResolver(client)
+        resolver = CrmMetadataResolver(self.client, cache=self.cache)
         result = await resolver.resolve_filter('company', conditions=[{'field': 'status', 'value': 'Active'}])
-
         self.assertEqual(result, {'COMPANY_TYPE': 'ACTIVE'})
 
 

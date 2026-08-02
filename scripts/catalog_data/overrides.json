@@ -1,0 +1,906 @@
+{
+  "methods": [
+    {
+      "method": "access.name",
+      "access": "read",
+      "title": "access.name",
+      "keywords": [
+        "access",
+        "name"
+      ]
+    },
+    {
+      "method": "app.info",
+      "access": "read",
+      "title": "app.info",
+      "keywords": [
+        "app",
+        "info"
+      ]
+    },
+    {
+      "method": "batch",
+      "title": "batch",
+      "keywords": [
+        "batch"
+      ],
+      "access": "read"
+    },
+    {
+      "method": "calendar.event.get",
+      "access": "read",
+      "scope": "calendar",
+      "title": "calendar.event.get",
+      "keywords": [
+        "calendar",
+        "event",
+        "get"
+      ]
+    },
+    {
+      "method": "calendar.event.get.nearest",
+      "title": "calendar.event.get.nearest",
+      "keywords": [
+        "calendar",
+        "event",
+        "get",
+        "nearest"
+      ],
+      "access": "read"
+    },
+    {
+      "method": "calendar.section.get",
+      "access": "read",
+      "scope": "calendar",
+      "title": "calendar.section.get",
+      "keywords": [
+        "calendar",
+        "section",
+        "get"
+      ]
+    },
+    {
+      "method": "crm.button.list",
+      "access": "read",
+      "title": "crm.button.list",
+      "keywords": [
+        "button",
+        "crm",
+        "list"
+      ]
+    },
+    {
+      "method": "crm.button.widgets.get",
+      "access": "read",
+      "title": "crm.button.widgets.get",
+      "keywords": [
+        "button",
+        "crm",
+        "get",
+        "widgets"
+      ]
+    },
+    {
+      "method": "crm.company.details.configuration.forceCommonScopeForAll",
+      "title": "crm.company.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "company",
+        "configuration",
+        "crm",
+        "details",
+        "forceCommonScopeForAll"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.company.details.configuration.reset",
+      "title": "crm.company.details.configuration.reset",
+      "keywords": [
+        "company",
+        "configuration",
+        "crm",
+        "details",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.contact.details.configuration.forceCommonScopeForAll",
+      "title": "crm.contact.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "configuration",
+        "contact",
+        "crm",
+        "details",
+        "forceCommonScopeForAll"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.contact.details.configuration.reset",
+      "title": "crm.contact.details.configuration.reset",
+      "keywords": [
+        "configuration",
+        "contact",
+        "crm",
+        "details",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.deal.details.configuration.forceCommonScopeForAll",
+      "title": "crm.deal.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "configuration",
+        "crm",
+        "deal",
+        "details",
+        "forceCommonScopeForAll"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.deal.details.configuration.reset",
+      "title": "crm.deal.details.configuration.reset",
+      "keywords": [
+        "configuration",
+        "crm",
+        "deal",
+        "details",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.activitydirection",
+      "title": "crm.enum.activitydirection",
+      "keywords": [
+        "activitydirection",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.activitynotifytype",
+      "title": "crm.enum.activitynotifytype",
+      "keywords": [
+        "activitynotifytype",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.activitypriority",
+      "title": "crm.enum.activitypriority",
+      "keywords": [
+        "activitypriority",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.activitystatus",
+      "title": "crm.enum.activitystatus",
+      "keywords": [
+        "activitystatus",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.activitytype",
+      "title": "crm.enum.activitytype",
+      "keywords": [
+        "activitytype",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.addresstype",
+      "title": "crm.enum.addresstype",
+      "keywords": [
+        "addresstype",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.contenttype",
+      "title": "crm.enum.contenttype",
+      "keywords": [
+        "contenttype",
+        "crm",
+        "enum"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.entityeditor.configuration.scope",
+      "access": "read",
+      "title": "crm.enum.entityeditor.configuration.scope",
+      "keywords": [
+        "configuration",
+        "crm",
+        "entityeditor",
+        "enum",
+        "scope"
+      ],
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.getorderownertypes",
+      "title": "crm.enum.getorderownertypes",
+      "keywords": [
+        "crm",
+        "enum",
+        "getorderownertypes"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.ownertype",
+      "title": "crm.enum.ownertype",
+      "keywords": [
+        "crm",
+        "enum",
+        "ownertype"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.enum.settings.mode",
+      "title": "crm.enum.settings.mode",
+      "keywords": [
+        "crm",
+        "enum",
+        "mode",
+        "settings"
+      ],
+      "access": "read",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.externalchannel.connector.fields",
+      "access": "read",
+      "title": "crm.externalchannel.connector.fields",
+      "keywords": [
+        "connector",
+        "crm",
+        "externalchannel",
+        "fields"
+      ]
+    },
+    {
+      "method": "crm.externalchannel.connector.list",
+      "access": "read",
+      "title": "crm.externalchannel.connector.list",
+      "keywords": [
+        "connector",
+        "crm",
+        "externalchannel",
+        "list"
+      ]
+    },
+    {
+      "method": "crm.item.details.configuration.forceCommonScopeForAll",
+      "title": "crm.item.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "forceCommonScopeForAll",
+        "item"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.item.details.configuration.reset",
+      "title": "crm.item.details.configuration.reset",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "item",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.lead.details.configuration.forceCommonScopeForAll",
+      "title": "crm.lead.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "forceCommonScopeForAll",
+        "lead"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.lead.details.configuration.reset",
+      "title": "crm.lead.details.configuration.reset",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "lead",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.productrow.get",
+      "access": "read",
+      "scope": "crm",
+      "title": "crm.productrow.get",
+      "keywords": [
+        "crm",
+        "productrow",
+        "get",
+        "product",
+        "row"
+      ]
+    },
+    {
+      "method": "crm.productrow.list",
+      "access": "read",
+      "scope": "crm",
+      "title": "crm.productrow.list",
+      "keywords": [
+        "crm",
+        "productrow",
+        "list",
+        "product",
+        "row"
+      ]
+    },
+    {
+      "method": "crm.quote.contact.fields",
+      "access": "read",
+      "title": "crm.quote.contact.fields",
+      "keywords": [
+        "contact",
+        "crm",
+        "fields",
+        "quote"
+      ]
+    },
+    {
+      "method": "crm.quote.contact.items.get",
+      "access": "read",
+      "title": "crm.quote.contact.items.get",
+      "keywords": [
+        "contact",
+        "crm",
+        "get",
+        "items",
+        "quote"
+      ]
+    },
+    {
+      "method": "crm.quote.details.configuration.forceCommonScopeForAll",
+      "title": "crm.quote.details.configuration.forceCommonScopeForAll",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "forceCommonScopeForAll",
+        "quote"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.quote.details.configuration.reset",
+      "title": "crm.quote.details.configuration.reset",
+      "keywords": [
+        "configuration",
+        "crm",
+        "details",
+        "quote",
+        "reset"
+      ],
+      "access": "write",
+      "scope": "crm"
+    },
+    {
+      "method": "crm.site.form.user.get",
+      "access": "read",
+      "title": "crm.site.form.user.get",
+      "keywords": [
+        "crm",
+        "form",
+        "get",
+        "site",
+        "user"
+      ]
+    },
+    {
+      "method": "crm.sitebutton.configuration.get",
+      "access": "read",
+      "title": "crm.sitebutton.configuration.get",
+      "keywords": [
+        "configuration",
+        "crm",
+        "get",
+        "sitebutton"
+      ]
+    },
+    {
+      "method": "crm.status.extra.fields",
+      "access": "read",
+      "title": "crm.status.extra.fields",
+      "keywords": [
+        "crm",
+        "extra",
+        "fields",
+        "status"
+      ]
+    },
+    {
+      "method": "crm.webform.configuration.get",
+      "access": "read",
+      "title": "crm.webform.configuration.get",
+      "keywords": [
+        "configuration",
+        "crm",
+        "get",
+        "webform"
+      ]
+    },
+    {
+      "method": "crm.webform.get",
+      "access": "read",
+      "scope": "crm",
+      "title": "crm.webform.get",
+      "keywords": [
+        "crm",
+        "webform",
+        "get",
+        "form"
+      ]
+    },
+    {
+      "method": "crm.webform.list",
+      "access": "read",
+      "scope": "crm",
+      "title": "crm.webform.list",
+      "keywords": [
+        "crm",
+        "webform",
+        "list",
+        "form"
+      ]
+    },
+    {
+      "method": "department.get",
+      "access": "read",
+      "scope": "department",
+      "title": "department.get",
+      "keywords": [
+        "department",
+        "get"
+      ]
+    },
+    {
+      "method": "disk.file.get",
+      "access": "read",
+      "scope": "disk",
+      "title": "disk.file.get",
+      "keywords": [
+        "disk",
+        "file",
+        "get"
+      ]
+    },
+    {
+      "method": "disk.folder.getchildren",
+      "access": "read",
+      "scope": "disk",
+      "title": "disk.folder.getchildren",
+      "keywords": [
+        "disk",
+        "folder",
+        "getchildren",
+        "children"
+      ]
+    },
+    {
+      "method": "disk.storage.getlist",
+      "access": "read",
+      "scope": "disk",
+      "title": "disk.storage.getlist",
+      "keywords": [
+        "disk",
+        "storage",
+        "getlist",
+        "list"
+      ]
+    },
+    {
+      "method": "entity.get",
+      "access": "read",
+      "scope": "entity",
+      "title": "entity.get",
+      "keywords": [
+        "entity",
+        "get"
+      ]
+    },
+    {
+      "method": "entity.item.get",
+      "access": "read",
+      "scope": "entity",
+      "title": "entity.item.get",
+      "keywords": [
+        "entity",
+        "item",
+        "get"
+      ]
+    },
+    {
+      "method": "feature.get",
+      "access": "read",
+      "title": "feature.get",
+      "keywords": [
+        "feature",
+        "get"
+      ]
+    },
+    {
+      "method": "im.chat.get",
+      "access": "read",
+      "scope": "im",
+      "title": "im.chat.get",
+      "keywords": [
+        "im",
+        "chat",
+        "get"
+      ]
+    },
+    {
+      "method": "im.dialog.messages.get",
+      "access": "read",
+      "scope": "im",
+      "title": "im.dialog.messages.get",
+      "keywords": [
+        "im",
+        "dialog",
+        "messages",
+        "get"
+      ]
+    },
+    {
+      "method": "im.user.business.list",
+      "access": "read",
+      "title": "im.user.business.list",
+      "keywords": [
+        "business",
+        "im",
+        "list",
+        "user"
+      ]
+    },
+    {
+      "method": "im.user.status.idle.end",
+      "title": "im.user.status.idle.end",
+      "keywords": [
+        "end",
+        "idle",
+        "im",
+        "status",
+        "user"
+      ],
+      "access": "write"
+    },
+    {
+      "method": "imopenlines.session.history.get",
+      "access": "read",
+      "scope": "imopenlines",
+      "title": "imopenlines.session.history.get",
+      "keywords": [
+        "imopenlines",
+        "session",
+        "history",
+        "get"
+      ]
+    },
+    {
+      "method": "lists.element.get",
+      "access": "read",
+      "scope": "lists",
+      "title": "lists.element.get",
+      "keywords": [
+        "lists",
+        "element",
+        "get"
+      ]
+    },
+    {
+      "method": "lists.field.get",
+      "access": "read",
+      "scope": "lists",
+      "title": "lists.field.get",
+      "keywords": [
+        "lists",
+        "field",
+        "get"
+      ]
+    },
+    {
+      "method": "lists.get",
+      "access": "read",
+      "scope": "lists",
+      "title": "lists.get",
+      "keywords": [
+        "lists",
+        "get"
+      ]
+    },
+    {
+      "method": "lists.get.iblock.type.id",
+      "title": "lists.get.iblock.type.id",
+      "keywords": [
+        "get",
+        "iblock",
+        "id",
+        "lists",
+        "type"
+      ],
+      "access": "read"
+    },
+    {
+      "method": "messageservice.message.status.get",
+      "access": "read",
+      "title": "messageservice.message.status.get",
+      "keywords": [
+        "get",
+        "message",
+        "messageservice",
+        "status"
+      ]
+    },
+    {
+      "method": "methods",
+      "access": "read",
+      "title": "methods",
+      "keywords": [
+        "methods",
+        "discovery",
+        "available"
+      ]
+    },
+    {
+      "method": "profile",
+      "access": "read",
+      "title": "profile",
+      "keywords": [
+        "profile",
+        "current",
+        "user"
+      ]
+    },
+    {
+      "method": "sale.cashbox.check.apply",
+      "title": "sale.cashbox.check.apply",
+      "keywords": [
+        "apply",
+        "cashbox",
+        "check",
+        "sale"
+      ],
+      "access": "write"
+    },
+    {
+      "method": "scope",
+      "access": "read",
+      "title": "scope",
+      "keywords": [
+        "scope",
+        "scopes",
+        "permissions"
+      ]
+    },
+    {
+      "method": "server.time",
+      "access": "read",
+      "title": "server.time",
+      "keywords": [
+        "server",
+        "time"
+      ]
+    },
+    {
+      "method": "sonet_group.get",
+      "access": "read",
+      "scope": "sonet",
+      "title": "sonet_group.get",
+      "keywords": [
+        "sonet",
+        "group",
+        "get",
+        "workgroup"
+      ]
+    },
+    {
+      "method": "sonet_group.user.get",
+      "access": "read",
+      "scope": "sonet",
+      "title": "sonet_group.user.get",
+      "keywords": [
+        "sonet",
+        "group",
+        "user",
+        "get"
+      ]
+    },
+    {
+      "method": "sonet_group_subject.get",
+      "access": "read",
+      "title": "sonet_group_subject.get",
+      "keywords": [
+        "get",
+        "group",
+        "sonet",
+        "subject"
+      ]
+    },
+    {
+      "method": "task.ctaskchecklistitem.get",
+      "access": "read",
+      "title": "task.ctaskchecklistitem.get",
+      "keywords": [
+        "ctaskchecklistitem",
+        "get",
+        "task"
+      ]
+    },
+    {
+      "method": "task.ctaskcommentitem.get",
+      "access": "read",
+      "title": "task.ctaskcommentitem.get",
+      "keywords": [
+        "ctaskcommentitem",
+        "get",
+        "task"
+      ]
+    },
+    {
+      "method": "task.ctaskelapseditem.get",
+      "access": "read",
+      "title": "task.ctaskelapseditem.get",
+      "keywords": [
+        "ctaskelapseditem",
+        "get",
+        "task"
+      ]
+    },
+    {
+      "method": "task.ctaskitem.getdata",
+      "access": "read",
+      "scope": "task",
+      "title": "task.ctaskitem.getdata",
+      "keywords": [
+        "task",
+        "ctaskitem",
+        "getdata",
+        "get"
+      ]
+    },
+    {
+      "method": "task.ctaskitem.list",
+      "access": "read",
+      "scope": "task",
+      "title": "task.ctaskitem.list",
+      "keywords": [
+        "task",
+        "ctaskitem",
+        "list"
+      ]
+    },
+    {
+      "method": "task.ctasklogitem.list",
+      "access": "read",
+      "title": "task.ctasklogitem.list",
+      "keywords": [
+        "ctasklogitem",
+        "list",
+        "task"
+      ]
+    },
+    {
+      "method": "task.item.userfield.gettypes",
+      "title": "task.item.userfield.gettypes",
+      "keywords": [
+        "gettypes",
+        "item",
+        "task",
+        "userfield"
+      ],
+      "access": "read"
+    },
+    {
+      "method": "tasks.task.getFields",
+      "access": "read",
+      "scope": "task",
+      "title": "tasks.task.getFields",
+      "keywords": [
+        "tasks",
+        "task",
+        "getfields",
+        "fields"
+      ]
+    },
+    {
+      "method": "timeman.status",
+      "access": "read",
+      "scope": "timeman",
+      "title": "timeman.status",
+      "keywords": [
+        "timeman",
+        "status"
+      ]
+    },
+    {
+      "method": "user.history.fields.list",
+      "access": "read",
+      "title": "user.history.fields.list",
+      "keywords": [
+        "fields",
+        "history",
+        "list",
+        "user"
+      ]
+    },
+    {
+      "method": "user.history.list",
+      "access": "read",
+      "scope": "user",
+      "title": "user.history.list",
+      "keywords": [
+        "user",
+        "history",
+        "list"
+      ]
+    },
+    {
+      "method": "user.option.get",
+      "access": "read",
+      "scope": "user",
+      "title": "user.option.get",
+      "keywords": [
+        "user",
+        "option",
+        "get"
+      ]
+    }
+  ]
+}

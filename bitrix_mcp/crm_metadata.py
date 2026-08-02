@@ -31,8 +31,9 @@ class CrmFilterResolutionError(ValueError):
 
 
 class CrmMetadataResolver:
-    def __init__(self, bitrix: BitrixClient):
+    def __init__(self, bitrix: BitrixClient, *, cache: TTLCache | None = None):
         self.bitrix = bitrix
+        self.cache = cache or CRM_METADATA_CACHE
 
     async def resolve_filter(
         self,
@@ -256,25 +257,22 @@ class CrmMetadataResolver:
         return [item for item in result if isinstance(item, dict)]
 
     async def status_values(self, entity_id: str) -> list[dict[str, Any]]:
-        result = await self.cached_call(
-            f'status_values:{entity_id}',
-            'crm.status.list',
-            {'order': {'SORT': 'ASC'}, 'filter': {'ENTITY_ID': entity_id}},
-        )
-        if not isinstance(result, list):
-            raise CrmFilterResolutionError(f'Unexpected crm.status.list response for {entity_id}.')
-        return [item for item in result if isinstance(item, dict)]
+        from bitrix_mcp.crm_statuses import get_crm_statuses_raw
+
+        raw, _cached = await get_crm_statuses_raw(self.bitrix, entity_id)
+        return [item for item in raw if isinstance(item, dict)]
 
     async def cached_call(self, key: str, method: str, params: dict[str, Any]) -> Any:
-        cache_key = CRM_METADATA_CACHE.make_key(key, params)
-        cached = CRM_METADATA_CACHE.get(cache_key)
+        scope = getattr(getattr(self.bitrix, 'identity', None), 'cache_key', '') or ''
+        cache_key = self.cache.make_key(key, params, scope=scope)
+        cached = self.cache.get(cache_key)
         if cached is not None:
             logfire.info('Bitrix CRM metadata cache hit', metadata_key=key)
             return cached
 
         logfire.info('Loading Bitrix CRM metadata', metadata_key=key, bitrix_method=method)
         result = await self.bitrix.call_method(method, params)
-        CRM_METADATA_CACHE.set(cache_key, result)
+        self.cache.set(cache_key, result)
         return result
 
     @staticmethod

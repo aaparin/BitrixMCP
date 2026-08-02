@@ -84,6 +84,23 @@ def parse_string_list_input(value: list[str] | str | None, *, name: str) -> list
     raise BitrixApiError(f'{name} must be an array of strings.')
 
 
+def parse_object_list_input(value: list[dict[str, Any]] | str | None, *, name: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            return [dict(item) for item in value]
+        raise BitrixApiError(f'{name} must be an array of objects.')
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise BitrixApiError(f'{name} must be a JSON array of objects.') from exc
+        if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+            return [dict(item) for item in parsed]
+    raise BitrixApiError(f'{name} must be an array of objects.')
+
+
 def normalize_entity_name(entity: str) -> str:
     normalized = entity.strip().upper().replace('-', '_').replace(' ', '_')
     return ENTITY_ALIASES.get(normalized, normalized)
@@ -284,16 +301,19 @@ async def describe_crm_entity_fields(
     field_names: list[str] | None = None,
     *,
     include_enums: bool = True,
+    include_system_fields: bool = True,
 ) -> dict[str, Any]:
     resolved = await resolve_crm_entity(bitrix, entity)
     wanted = {field_name.upper() for field_name in (field_names or [])}
 
-    fields = await get_crm_fields(bitrix, resolved)
-    normalized_fields = [
-        normalize_field(name, definition, include_enums=include_enums)
-        for name, definition in fields.items()
-        if isinstance(definition, dict) and (not wanted or name.upper() in wanted)
-    ]
+    normalized_fields: list[dict[str, Any]] = []
+    if include_system_fields:
+        fields = await get_crm_fields(bitrix, resolved)
+        normalized_fields = [
+            normalize_field(name, definition, include_enums=include_enums)
+            for name, definition in fields.items()
+            if isinstance(definition, dict) and (not wanted or name.upper() in wanted)
+        ]
 
     userfields = await list_crm_userfields(bitrix, resolved)
     matched_userfields: list[dict[str, Any]] = []

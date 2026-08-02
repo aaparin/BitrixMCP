@@ -17,8 +17,10 @@ class TTLCache:
         self.ttl_seconds = ttl_seconds
         self._items: dict[str, CacheEntry] = {}
 
-    def make_key(self, namespace: str, payload: Any) -> str:
+    def make_key(self, namespace: str, payload: Any, *, scope: str = '') -> str:
         serialized = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+        if scope:
+            return f'{scope}:{namespace}:{serialized}'
         return f'{namespace}:{serialized}'
 
     def get(self, key: str) -> Any | None:
@@ -36,3 +38,14 @@ class TTLCache:
             value=value,
         )
 
+    def delete(self, key: str) -> bool:
+        return self._items.pop(key, None) is not None
+
+    def invalidate_prefix(self, prefix: str) -> int:
+        keys = [key for key in self._items if key.startswith(prefix)]
+        for key in keys:
+            self._items.pop(key, None)
+        return len(keys)
+
+    def clear(self) -> None:
+        self._items.clear()

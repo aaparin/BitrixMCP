@@ -2,75 +2,81 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx
 import logfire
 
-
-READ_ONLY_ACTIONS = {
-    'get',
-    'list',
-    'fields',
-    'search',
-    'count',
-    'status',
-    'history',
-    'items',
-    'types',
-    'enum',
-    'userfield',
-}
-
-WRITE_ACTIONS = {
-    'add',
-    'create',
-    'set',
-    'update',
-    'delete',
-    'remove',
-    'bind',
-    'unbind',
-    'send',
-    'import',
-    'batch',
-}
+from bitrix_mcp.errors import BitrixApiError, MethodNotAllowed, ReadOnlyViolation
+from bitrix_mcp.identity import BitrixIdentity, coerce_identity
+from bitrix_mcp.methods.catalog import MethodCatalog, default_catalog
+from bitrix_mcp.methods.policy import MethodPolicy
 
 
-class BitrixApiError(RuntimeError):
-    pass
-
-
-class ReadOnlyViolation(BitrixApiError):
-    pass
+# Re-export for back-compat with existing imports.
+__all__ = [
+    'BitrixApiError',
+    'BitrixClient',
+    'MethodNotAllowed',
+    'ReadOnlyViolation',
+    'normalize_webhook_url',
+]
 
 
 def normalize_webhook_url(webhook_url: str) -> str:
     return webhook_url.rstrip('/') + '/'
 
 
-def is_read_only_method(method: str) -> bool:
-    parts = [part.lower() for part in method.replace('-', '.').split('.') if part]
-    if not parts:
-        return False
-    if any(part in WRITE_ACTIONS for part in parts):
-        return False
-    return any(part in READ_ONLY_ACTIONS for part in parts)
-
-
 class BitrixClient:
     def __init__(
         self,
-        webhook_url: str,
+        identity: BitrixIdentity | str,
         *,
         timeout: float = 20,
-        read_only: bool = True,
+        policy: MethodPolicy | None = None,
+        catalog: MethodCatalog | None = None,
+        allowed_access: frozenset[str] | None = None,
+        allow_unknown_methods: bool = False,
+        read_only: bool | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ):
-        self.webhook_url = normalize_webhook_url(webhook_url)
+        self.identity = coerce_identity(identity)
+        self.webhook_url = getattr(self.identity, 'base_url', None) or (
+            normalize_webhook_url(identity) if isinstance(identity, str) else ''
+        )
+
         self.timeout = timeout
-        self.read_only = read_only
         self.transport = transport
+        self._http_client = http_client
+        self._owns_http_client = http_client is None
+
+        if policy is not None:
+            self.policy = policy
+        else:
+            resolved_catalog = catalog or default_catalog()
+            if allowed_access is None:
+                if read_only is False:
+                    allowed_access = frozenset({'read', 'write', 'destructive'})
+                else:
+                    allowed_access = frozenset({'read'})
+            self.policy = MethodPolicy(
+                catalog=resolved_catalog,
+                allowed_access=frozenset(allowed_access),
+                allow_unknown_methods=allow_unknown_methods,
+            )
+
+        # Back-compat flag used by older tests.
+        self.read_only = 'write' not in self.policy.allowed_access and 'destructive' not in self.policy.allowed_access
+
+    async def aclose(self) -> None:
+        if self._owns_http_client and self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout, transport=self.transport)
+        return self._http_client
 
     async def call_method(self, method: str, params: dict[str, Any] | None = None) -> Any:
         payload = await self.call_method_payload(method, params)
@@ -80,29 +86,64 @@ class BitrixClient:
         method = method.strip()
         if not method:
             raise BitrixApiError('Bitrix24 method name is empty.')
-        if self.read_only and not is_read_only_method(method):
-            raise ReadOnlyViolation(f'Method "{method}" is blocked by read-only mode.')
 
         params = self._normalize_params(method, params or {})
-        url = urljoin(self.webhook_url, f'{method}.json')
+        decision = self.policy.decide(method, params)
+        decision.raise_if_denied()
+
+        auth_params = self.identity.auth_params()
+        request_params = {**auth_params, **params} if auth_params else params
+        url = self.identity.request_url(method)
+
+        payload, status_code = await self._post_json(url, request_params, method=method)
+        if self._is_auth_error(payload, status_code):
+            refreshed = await self.identity.on_auth_error()
+            if refreshed:
+                auth_params = self.identity.auth_params()
+                request_params = {**auth_params, **params} if auth_params else params
+                url = self.identity.request_url(method)
+                payload, status_code = await self._post_json(url, request_params, method=method)
+
+        if status_code >= 400:
+            message = (
+                payload.get('error_description') or payload.get('error') or str(payload)
+                if isinstance(payload, dict)
+                else str(payload)
+            )
+            raise BitrixApiError(f'Bitrix24 HTTP {status_code}: {message}')
+
+        if isinstance(payload, dict) and payload.get('error'):
+            message = payload.get('error_description') or payload['error']
+            raise BitrixApiError(f'Bitrix24 API error: {message}')
+
+        if decision.warnings and isinstance(payload, dict):
+            existing = payload.get('warnings')
+            merged = list(existing) if isinstance(existing, list) else []
+            merged.extend(decision.warnings)
+            payload = {**payload, 'warnings': merged}
+
+        return payload
+
+    async def _post_json(self, url: str, params: dict[str, Any], *, method: str) -> tuple[Any, int]:
+        client = self._get_http_client()
         with logfire.span('Bitrix24 REST request', bitrix_method=method):
-            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
-                response = await client.post(url, json=params)
+            response = await client.post(url, json=params)
 
         try:
             payload = response.json()
         except ValueError as exc:
             raise BitrixApiError(f'Bitrix24 returned non-JSON response with HTTP {response.status_code}.') from exc
 
-        if response.status_code >= 400:
-            message = payload.get('error_description') or payload.get('error') or response.text
-            raise BitrixApiError(f'Bitrix24 HTTP {response.status_code}: {message}')
+        return payload, response.status_code
 
-        if isinstance(payload, dict) and payload.get('error'):
-            message = payload.get('error_description') or payload['error']
-            raise BitrixApiError(f'Bitrix24 API error: {message}')
-
-        return payload
+    @staticmethod
+    def _is_auth_error(payload: Any, status_code: int | None = None) -> bool:
+        if status_code == 401:
+            return True
+        if not isinstance(payload, dict):
+            return False
+        error = str(payload.get('error') or '').lower()
+        return error in {'expired_token', 'invalid_token', 'no_auth_found'}
 
     async def count_list_method(self, method: str, params: dict[str, Any] | None = None) -> int:
         request_params = dict(params or {})

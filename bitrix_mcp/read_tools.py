@@ -1,10 +1,36 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from bitrix_mcp.bitrix import BitrixApiError, BitrixClient
-from bitrix_mcp.direct_tools import parse_object_input, parse_string_list_input
+from bitrix_mcp.crm_metadata import CrmFilterResolutionError, CrmMetadataResolver
+from bitrix_mcp.direct_tools import parse_object_input, parse_object_list_input, parse_string_list_input
+from bitrix_mcp.records import normalize_text
+
+
+CRM_ENTITY_METHODS = {
+    'company': 'crm.company.list',
+    'contact': 'crm.contact.list',
+    'deal': 'crm.deal.list',
+    'lead': 'crm.lead.list',
+}
+
+TASK_STATUS_ALIASES = {
+    'new': 1,
+    'pending': 2,
+    'accepted': 2,
+    'in_progress': 3,
+    'in progress': 3,
+    'active': 3,
+    'current': 3,
+    'almost completed': 4,
+    'awaiting review': 4,
+    'completed': 5,
+    'finished': 5,
+    'done': 5,
+    'deferred': 6,
+}
 
 
 CRM_ENTITY_TYPE_IDS = {
@@ -305,3 +331,58 @@ async def telephony_calls_list_data(
 
 async def telephony_lines_list_data(bitrix: BitrixClient) -> dict[str, Any]:
     return ensure_payload_dict(await bitrix.call_method_payload('voximplant.line.get', {}))
+
+
+def normalize_task_status_filter(status: str | int | None) -> dict[str, Any]:
+    if status is None:
+        return {}
+    if isinstance(status, int):
+        return {'STATUS': status}
+    normalized = normalize_text(status)
+    if normalized in {'open', 'not completed', 'non completed', 'not done'}:
+        return {'!STATUS': 5}
+    if normalized in TASK_STATUS_ALIASES:
+        return {'STATUS': TASK_STATUS_ALIASES[normalized]}
+    if status.isdigit():
+        return {'STATUS': int(status)}
+    return {'STATUS': status}
+
+
+async def crm_count_data(
+    bitrix: BitrixClient,
+    entity: Literal['company', 'contact', 'deal', 'lead'] | str,
+    *,
+    filter: dict[str, Any] | str | None = None,
+    conditions: list[dict[str, Any]] | str | None = None,
+) -> dict[str, Any]:
+    entity_key = str(entity).strip().lower()
+    if entity_key not in CRM_ENTITY_METHODS:
+        supported = ', '.join(sorted(CRM_ENTITY_METHODS))
+        raise BitrixApiError(f'Unsupported CRM entity "{entity}". Use one of: {supported}.')
+
+    resolver = CrmMetadataResolver(bitrix)
+    try:
+        normalized_filter = await resolver.resolve_filter(
+            entity_key,
+            filter=parse_object_input(filter, name='filter'),
+            conditions=parse_object_list_input(conditions, name='conditions'),
+        )
+    except CrmFilterResolutionError as exc:
+        raise BitrixApiError(str(exc)) from exc
+
+    method = CRM_ENTITY_METHODS[entity_key]
+    total = await bitrix.count_list_method(method, {'filter': normalized_filter, 'select': ['ID'], 'start': 0})
+    return {'entity': entity_key, 'filter': normalized_filter, 'total': total}
+
+
+async def tasks_count_data(
+    bitrix: BitrixClient,
+    *,
+    filter: dict[str, Any] | str | None = None,
+) -> dict[str, Any]:
+    parsed_filter = parse_object_input(filter, name='filter')
+    total = await bitrix.count_list_method(
+        'tasks.task.list',
+        {'filter': parsed_filter, 'select': ['ID'], 'start': 0},
+    )
+    return {'entity': 'task', 'filter': parsed_filter, 'total': total}

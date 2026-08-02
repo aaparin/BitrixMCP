@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     environment:
-      BITRIX_FORCE_OPENROUTER: "true"
+      BITRIX_ALLOWED_ACCESS: "read"
       BITRIX_READ_ONLY: "true"
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
