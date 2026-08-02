@@ -36,9 +36,11 @@ class BitrixClient:
         catalog: MethodCatalog | None = None,
         allowed_access: frozenset[str] | None = None,
         allow_unknown_methods: bool = False,
+        allow_webhook_writes: bool = False,
         read_only: bool | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         http_client: httpx.AsyncClient | None = None,
+        ownership_guard: Any = None,
     ):
         self.identity = coerce_identity(identity)
         self.webhook_url = getattr(self.identity, 'base_url', None) or (
@@ -49,6 +51,7 @@ class BitrixClient:
         self.transport = transport
         self._http_client = http_client
         self._owns_http_client = http_client is None
+        self.ownership_guard = ownership_guard
 
         if policy is not None:
             self.policy = policy
@@ -63,6 +66,7 @@ class BitrixClient:
                 catalog=resolved_catalog,
                 allowed_access=frozenset(allowed_access),
                 allow_unknown_methods=allow_unknown_methods,
+                allow_webhook_writes=allow_webhook_writes,
             )
 
         # Back-compat flag used by older tests.
@@ -88,8 +92,18 @@ class BitrixClient:
             raise BitrixApiError('Bitrix24 method name is empty.')
 
         params = self._normalize_params(method, params or {})
-        decision = self.policy.decide(method, params)
+        decision = self.policy.decide(method, params, identity=self.identity)
         decision.raise_if_denied()
+
+        if (
+            self.ownership_guard is not None
+            and decision.access in {'write', 'destructive'}
+        ):
+            ownership = await self.ownership_guard.check(self, method, params, self.identity)
+            if not ownership.allowed:
+                raise MethodNotAllowed(ownership.reason or 'Ownership check failed.')
+            if ownership.mutated_params is not None:
+                params = ownership.mutated_params
 
         auth_params = self.identity.auth_params()
         request_params = {**auth_params, **params} if auth_params else params

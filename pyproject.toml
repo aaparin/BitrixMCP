@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "MCP server for Bitrix24"
 requires-python = ">=3.12"
 dependencies = [
+    "b24pysdk>=0.2.0",
+    "cryptography>=44.0.0",
     "fastmcp>=3.3.1",
     "httpx>=0.28.0",
     "logfire>=4.33.0",

@@ -6,16 +6,23 @@ services:
     env_file:
       - .env
     environment:
-      BITRIX_ALLOWED_ACCESS: "read"
-      BITRIX_READ_ONLY: "true"
+      BITRIX_ALLOWED_ACCESS: ${BITRIX_ALLOWED_ACCESS:-read}
+      BITRIX_READ_ONLY: ${BITRIX_READ_ONLY:-true}
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
       MCP_TRANSPORT: streamable-http
       MCP_PATH: /mcp
       MCP_BEARER_TOKEN: ${MCP_BEARER_TOKEN}
+      MCP_PUBLIC_BASE_URL: ${MCP_PUBLIC_BASE_URL}
+      BITRIX_TOKEN_DB_PATH: /data/tokens.db
       LOGFIRE_ENABLED: "false"
+    volumes:
+      - bitrix-mcp-data:/data
     networks:
       - librechat
+
+volumes:
+  bitrix-mcp-data:
 
 networks:
   librechat:

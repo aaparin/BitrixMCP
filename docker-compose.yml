@@ -13,3 +13,4 @@ services:
     volumes:
       - ./bitrix_mcp:/app/bitrix_mcp
       - ./main.py:/app/main.py
+      - ./data:/data

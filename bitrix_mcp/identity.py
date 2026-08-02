@@ -24,6 +24,7 @@ class WebhookIdentity:
     """Inbound webhook identity. Token stays in the URL path, never in auth_params."""
 
     __slots__ = ('base_url', '_cache_key', '_label')
+    kind = 'webhook'
 
     def __init__(self, webhook_url: str):
         base = webhook_url.rstrip('/') + '/'

@@ -3,13 +3,19 @@
 Deterministic MCP server for Bitrix24 REST. No internal LLM: the client model
 discovers endpoints and calls curated tools or `bitrix_call`.
 
-## Tools (21) + resources
+## Tools + resources
 
 Discovery:
 
 - `bitrix_search_methods(query, scope?, access?, includeDeprecated?, limit?)`
 - `bitrix_describe_method(method)`
 - `bitrix_list_scopes()`
+
+Identity / OAuth:
+
+- `bitrix_whoami()` — current email, Bitrix user id, auth mode, token expiry
+- `bitrix_authorize()` — authorization URL (idempotent)
+- `bitrix_revoke()` — drop stored user token
 
 CRM statuses (shared loader + cache):
 
@@ -24,6 +30,12 @@ Curated reads:
 - `activities_list` / `activity_get`
 - `employees_list` / `employee_get` / `employees_search`
 - `telephony_calls_list` / `telephony_lines_list`
+
+Curated writes (require OAuth user identity; default `dry_run=true`):
+
+- `crm_item_add` / `crm_item_update`
+- `task_add` / `task_update`
+- `activity_add`
 
 Escape hatch:
 
@@ -63,6 +75,50 @@ Other optional settings: `BITRIX_METHOD_CATALOG_PATH`, `BITRIX_PORTAL_METHODS_TT
 `BITRIX_CRM_METADATA_TTL_SECONDS`, `BITRIX_REQUEST_TIMEOUT_SECONDS`, MCP host/port/transport/path,
 `MCP_BEARER_TOKEN`, `MCP_PUBLIC_BASE_URL`, Logfire flags.
 
+## Per-user OAuth writes
+
+Reads stay on the inbound webhook. Writes run as the LibreChat user after a one-time
+browser consent. LibreChat must send the authenticated user email in
+`X-Bitrix-User-Email` (or `BITRIX_USER_EMAIL_HEADER`).
+
+### Register a local application (with UI)
+
+In Bitrix24: **Applications → Developer resources → Other → Local application**.
+
+1. Do **not** enable “Application uses only API” — register **with an interface**
+   (needed for the `/bitrix/app` fallback placement page).
+2. Handler / `redirect_uri`: `https://<MCP_PUBLIC_BASE_URL>/oauth/callback`
+3. Scopes must cover at least what the webhook can do (crm, task, user, …).
+4. Put `client_id` / `client_secret` into env.
+
+### Enable on the server
+
+```dotenv
+BITRIX_OAUTH_ENABLED="true"
+BITRIX_OAUTH_CLIENT_ID="..."
+BITRIX_OAUTH_CLIENT_SECRET="..."
+BITRIX_PORTAL_URL="https://example.bitrix24.ru"
+BITRIX_MEMBER_ID="..."
+BITRIX_TOKEN_DB_PATH="/data/tokens.db"
+BITRIX_TOKEN_ENCRYPTION_KEY="..."   # Fernet key
+BITRIX_ALLOWED_ACCESS="read,write"
+MCP_BEARER_TOKEN="required-when-oauth-on"
+MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
+```
+
+Generate an encryption key:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+With OAuth on:
+
+- Webhook writes are blocked unless `BITRIX_ALLOW_WEBHOOK_WRITES=true` (emergency only).
+- `OwnershipGuard` allows mutating only records the user is responsible for
+  (`BITRIX_OWNERSHIP_ADMIN_EMAILS` bypasses ownership, not OAuth).
+- HTTP routes: `GET /oauth/callback`, `GET|POST /bitrix/app`, `GET /healthz`.
+
 ## Method catalog
 
 The packaged catalog is generated from [b24-rest-docs](https://github.com/bitrix-tools/b24-rest-docs)
@@ -99,12 +155,11 @@ MCP_BEARER_TOKEN="change-this-long-random-token"
 MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
 ```
 
-Clients send `Authorization: Bearer ...`. Per-user OAuth is planned for a later stage;
-webhook identity is the current production path.
+Clients send `Authorization: Bearer ...`. When `BITRIX_OAUTH_ENABLED=true`, bearer is **required**.
 
 ## Design notes
 
 - Unknown / undocumented methods are denied by default (`BITRIX_ALLOW_UNKNOWN_METHODS` can open the valve).
 - Deprecated methods are allowed with a warning.
-- `batch` subcommands are checked individually; nested `batch` is denied.
-- `BitrixIdentity` is the seam for future OAuth local applications.
+- `batch` subcommands are checked individually; nested `batch` and write subcommands are denied.
+- `BitrixIdentity` covers webhook + per-user OAuth; writes never use the webhook under OAuth mode.

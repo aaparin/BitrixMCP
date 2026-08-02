@@ -5,6 +5,8 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from bitrix_mcp.oauth.store import TokenStore
+
 
 VALID_ACCESS_LEVELS = frozenset({'read', 'write', 'destructive', 'unknown'})
 
@@ -84,6 +86,19 @@ def _resolve_allowed_access() -> frozenset[str]:
     return frozenset({'read'})
 
 
+def _parse_email_list(raw: str | None) -> frozenset[str]:
+    if not raw or not raw.strip():
+        return frozenset()
+    return frozenset(TokenStore.normalize_email(part) for part in raw.split(',') if part.strip())
+
+
+def _parse_csv(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    if raw is None or not raw.strip():
+        return default
+    values = tuple(part.strip() for part in raw.split(',') if part.strip())
+    return values or default
+
+
 @dataclass(frozen=True)
 class Settings:
     bitrix_webhook_url: str
@@ -102,6 +117,22 @@ class Settings:
     crm_statuses_ttl_seconds: int
     logfire_enabled: bool
     logfire_instrument_httpx: bool
+    # OAuth / per-user writes
+    oauth_enabled: bool
+    oauth_client_id: str
+    oauth_client_secret: str
+    portal_url: str
+    member_id: str
+    user_email_header: str
+    token_db_path: str
+    token_encryption_key: str
+    allow_webhook_writes: bool
+    write_ownership: str
+    ownership_admin_emails: frozenset[str]
+    task_ownership_fields: tuple[str, ...]
+    auth_state_ttl_seconds: int
+    auth_wait_seconds: int
+    token_refresh_skew_seconds: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -125,12 +156,34 @@ class Settings:
             crm_statuses_ttl_seconds=_env_int('BITRIX_CRM_STATUSES_TTL_SECONDS', 900),
             logfire_enabled=_env_bool('LOGFIRE_ENABLED', True),
             logfire_instrument_httpx=_env_bool('LOGFIRE_INSTRUMENT_HTTPX', False),
+            oauth_enabled=_env_bool('BITRIX_OAUTH_ENABLED', False),
+            oauth_client_id=os.getenv('BITRIX_OAUTH_CLIENT_ID', '').strip(),
+            oauth_client_secret=os.getenv('BITRIX_OAUTH_CLIENT_SECRET', '').strip(),
+            portal_url=os.getenv('BITRIX_PORTAL_URL', '').strip(),
+            member_id=os.getenv('BITRIX_MEMBER_ID', '').strip(),
+            user_email_header=os.getenv('BITRIX_USER_EMAIL_HEADER', 'X-Bitrix-User-Email').strip()
+            or 'X-Bitrix-User-Email',
+            token_db_path=os.getenv('BITRIX_TOKEN_DB_PATH', '/data/tokens.db').strip() or '/data/tokens.db',
+            token_encryption_key=os.getenv('BITRIX_TOKEN_ENCRYPTION_KEY', '').strip(),
+            allow_webhook_writes=_env_bool('BITRIX_ALLOW_WEBHOOK_WRITES', False),
+            write_ownership=os.getenv('BITRIX_WRITE_OWNERSHIP', 'strict').strip().lower() or 'strict',
+            ownership_admin_emails=_parse_email_list(os.getenv('BITRIX_OWNERSHIP_ADMIN_EMAILS')),
+            task_ownership_fields=_parse_csv(
+                os.getenv('BITRIX_TASK_OWNERSHIP_FIELDS'),
+                ('RESPONSIBLE_ID',),
+            ),
+            auth_state_ttl_seconds=_env_int('BITRIX_AUTH_STATE_TTL_SECONDS', 900),
+            auth_wait_seconds=_env_int('BITRIX_AUTH_WAIT_SECONDS', 120),
+            token_refresh_skew_seconds=_env_int('BITRIX_TOKEN_REFRESH_SKEW_SECONDS', 300),
         )
 
     @property
     def read_only(self) -> bool:
-        """Compatibility helper: true when only read access is allowed."""
         return self.allowed_access == frozenset({'read'})
+
+    @property
+    def ownership_enabled(self) -> bool:
+        return self.write_ownership != 'off'
 
     def validate_for_run(self) -> None:
         missing: list[str] = []
@@ -144,6 +197,27 @@ class Settings:
             missing.append('MCP_PUBLIC_BASE_URL must start with http:// or https://')
         if not self.allowed_access:
             missing.append('BITRIX_ALLOWED_ACCESS must not be empty')
+        if self.write_ownership not in {'strict', 'off'}:
+            missing.append('BITRIX_WRITE_OWNERSHIP must be strict or off')
+
+        if self.oauth_enabled:
+            if not self.oauth_client_id:
+                missing.append('BITRIX_OAUTH_CLIENT_ID')
+            if not self.oauth_client_secret:
+                missing.append('BITRIX_OAUTH_CLIENT_SECRET')
+            if not self.portal_url:
+                missing.append('BITRIX_PORTAL_URL')
+            elif not self.portal_url.startswith(('http://', 'https://')):
+                missing.append('BITRIX_PORTAL_URL must start with http:// or https://')
+            if not self.member_id:
+                missing.append('BITRIX_MEMBER_ID')
+            if not self.token_encryption_key:
+                missing.append('BITRIX_TOKEN_ENCRYPTION_KEY')
+            if not self.public_base_url:
+                missing.append('MCP_PUBLIC_BASE_URL')
+            if not self.bearer_token:
+                missing.append('MCP_BEARER_TOKEN (required when BITRIX_OAUTH_ENABLED=true)')
+
         if missing:
             names = ', '.join(missing)
             raise RuntimeError(f'Missing or invalid configuration: {names}')
