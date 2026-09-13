@@ -43,6 +43,22 @@ def _page(title: str, body: str, *, ok: bool = True) -> HTMLResponse:
     return HTMLResponse(content)
 
 
+def _install_finish_script() -> str:
+    """Complete the Bitrix24 UI-app installation from its iframe wizard."""
+    return """
+<script src="//api.bitrix24.com/api/v1/"></script>
+<script>
+  (function () {
+    if (window.BX24) {
+      BX24.init(function () {
+        BX24.installFinish();
+      });
+    }
+  }());
+</script>
+"""
+
+
 def register_oauth_routes(
     server: Any,
     *,
@@ -56,8 +72,15 @@ def register_oauth_routes(
     async def healthz(_request: Request) -> PlainTextResponse:
         return PlainTextResponse('ok')
 
-    @server.custom_route('/oauth/callback', methods=['GET'])
+    @server.custom_route('/oauth/callback', methods=['GET', 'POST'])
     async def oauth_callback(request: Request) -> HTMLResponse:
+        # Bitrix24 uses the configured handler path for its in-portal UI and
+        # sends placement credentials to it as a form POST.  The same path is
+        # also the redirect_uri of our chat OAuth flow, which arrives as GET.
+        # Keep both flows on the registered handler URL.
+        if request.method == 'POST':
+            return await bitrix_app_page(request)
+
         code = (request.query_params.get('code') or '').strip()
         state = (request.query_params.get('state') or '').strip()
         query_member_id = (request.query_params.get('member_id') or '').strip()
@@ -279,7 +302,8 @@ def register_oauth_routes(
             return _page(
                 'Connected',
                 f'<p>Signed in as <strong>{display}</strong> ({html.escape(email)}).</p>'
-                '<p class="muted">Token status is active. You can return to chat and use write tools.</p>',
+                '<p class="muted">Token status is active. You can return to chat and use write tools.</p>'
+                + _install_finish_script(),
             )
         except Exception:
             return _page(
