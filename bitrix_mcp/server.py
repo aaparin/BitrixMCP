@@ -311,17 +311,28 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         select: list[str] | str | None = None,
         order: dict[str, Any] | str | None = None,
         start: int = 0,
-        use_original_userfield_names: bool = True,
+        use_original_userfield_names: bool | None = None,
     ) -> dict[str, Any]:
         """List CRM items for leads, deals, contacts, companies, quotes, invoices, or smart processes.
 
+        Field names here are camelCase: `id`, `title`, `stageId`, `opportunity`,
+        `assignedById`. That is this method's own convention and it differs from
+        `crm_describe_fields`, which reports UPPER_SNAKE names. Filter keys may
+        carry an operator prefix — `>=id`, `%title` — and the name after the
+        prefix must be camelCase too.
+
         Args:
             entity: Entity alias, numeric entityTypeId, or DYNAMIC_<entityTypeId>.
-            filter: Bitrix24 crm.item.list filter object.
-            select: Fields to return. Use ["*"] to include multi-fields such as phones and email.
+            filter: Bitrix24 crm.item.list filter object, camelCase field names.
+            select: Fields to return, camelCase. Use ["*"] for every field including
+                multi-fields such as phones and email. ALWAYS pass this for a list:
+                without it every record carries ~85 fields.
             order: Sort object such as {"id": "DESC"}.
             start: Non-negative pagination offset returned as next by Bitrix24.
             use_original_userfield_names: Return custom fields as UF_CRM_* names.
+                Leave unset. Bitrix24 returns EMPTY records when this is true and
+                `select` is given, so unset means "whichever works": original names
+                without a select, auto names with one.
         """
         return await crm_items_list_data(
             await bitrix_client(),

@@ -182,6 +182,55 @@ async def crm_types_list_data(
     return ensure_payload_dict(await bitrix.call_method_payload('crm.type.list', params))
 
 
+#: Operator prefixes a Bitrix24 filter key may carry, longest first so that
+#: `!><` is not mistaken for `!`.
+FILTER_OPERATORS = ('!><', '!%', '!=', '!@', '>=', '<=', '=%', '%=', '><', '!', '=', '>', '<', '%', '@')
+
+
+def split_filter_operator(key: str) -> tuple[str, str]:
+    """`">=ID"` → `(">=", "ID")`. A key with no operator keeps an empty one."""
+    for operator in FILTER_OPERATORS:
+        if key.startswith(operator):
+            return operator, key[len(operator) :]
+    return '', key
+
+
+def to_camel_field(name: str) -> str:
+    """`STAGE_ID` → `stageId`. Anything already camel, or a user field, is left alone.
+
+    The two halves of the CRM API disagree about names: `crm.deal.fields` — which
+    is what `crm_describe_fields` reports — speaks UPPER_SNAKE, while
+    `crm.item.*` speaks camelCase. A caller that looks a field up and then uses
+    it in a filter is therefore wrong through no fault of its own, and Bitrix
+    answers with `field '%_TI_TL_E' is not allowed in filter`: its own converter
+    mangles the name it was given.
+
+    Translating here is the adapter's job. `UF_` names are exempt: those are the
+    portal's own, and Bitrix does not rename them.
+    """
+    if not name or not name.isupper() or name.startswith('UF_'):
+        return name
+    head, *rest = name.lower().split('_')
+    return head + ''.join(part.capitalize() for part in rest)
+
+
+def camelize_keys(value: Any) -> Any:
+    """Filter or order object with its field names in the dialect crm.item speaks."""
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        operator, field = split_filter_operator(str(key))
+        out[f'{operator}{to_camel_field(field)}'] = item
+    return out
+
+
+def camelize_select(value: Any) -> Any:
+    if not isinstance(value, list):
+        return value
+    return [to_camel_field(str(item)) if item != '*' else '*' for item in value]
+
+
 async def crm_items_list_data(
     bitrix: BitrixClient,
     entity: str | int,
@@ -190,16 +239,49 @@ async def crm_items_list_data(
     select: list[str] | str | None = None,
     order: dict[str, Any] | str | None = None,
     start: int = 0,
-    use_original_userfield_names: bool = True,
+    use_original_userfield_names: bool | None = None,
 ) -> dict[str, Any]:
+    """List CRM items.
+
+    `use_original_userfield_names` is tri-state on purpose. Bitrix24 answers
+    `crm.item.list` with EMPTY item objects when `useOriginalUfNames=Y` is
+    combined with a `select` — no error, no warning, just `{}` per record. The
+    old default of True therefore broke every selective read silently, and the
+    only way to get data back was to ask for all ~85 fields of every record.
+
+    So: unspecified means "choose the one that works" — original UF names when
+    no select is given, auto names when one is. Asking for both explicitly is
+    refused rather than silently answered with nothing.
+    """
     params: dict[str, Any] = {
         'entityTypeId': resolve_crm_entity_type_id(entity),
         'start': normalize_start(start),
-        'useOriginalUfNames': 'Y' if use_original_userfield_names else 'N',
     }
     add_optional_object(params, 'filter', filter)
     add_optional_object(params, 'order', order)
     add_optional_select(params, select)
+    # crm.item.* is camelCase; crm_describe_fields reports UPPER_SNAKE. A caller
+    # that looks a field up and uses it here is otherwise punished for it.
+    if 'filter' in params:
+        params['filter'] = camelize_keys(params['filter'])
+    if 'order' in params:
+        params['order'] = camelize_keys(params['order'])
+    if 'select' in params:
+        params['select'] = camelize_select(params['select'])
+    has_select = bool(params.get('select'))
+
+    if use_original_userfield_names is None:
+        use_original_userfield_names = not has_select
+    elif use_original_userfield_names and has_select:
+        raise BitrixApiError(
+            'Bitrix24 returns empty records for crm.item.list when '
+            'use_original_userfield_names=true is combined with select. Either drop '
+            'select to get every field under UF_CRM_* names, or keep select and let '
+            'use_original_userfield_names default (custom fields then come back under '
+            'their auto names).'
+        )
+
+    params['useOriginalUfNames'] = 'Y' if use_original_userfield_names else 'N'
     return ensure_payload_dict(await bitrix.call_method_payload('crm.item.list', params))
 
 
