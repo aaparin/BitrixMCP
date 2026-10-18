@@ -12,7 +12,6 @@ services:
       MCP_PORT: 8000
       MCP_TRANSPORT: streamable-http
       MCP_PATH: /mcp
-      MCP_BEARER_TOKEN: ${MCP_BEARER_TOKEN}
       MCP_PUBLIC_BASE_URL: ${MCP_PUBLIC_BASE_URL}
       BITRIX_TOKEN_DB_PATH: /data/tokens.db
       LOGFIRE_ENABLED: "false"

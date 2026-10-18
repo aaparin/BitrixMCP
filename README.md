@@ -11,11 +11,9 @@ Discovery:
 - `bitrix_describe_method(method)`
 - `bitrix_list_scopes()`
 
-Identity / OAuth:
+Identity:
 
-- `bitrix_whoami()` — current email, Bitrix user id, auth mode, token expiry
-- `bitrix_authorize()` — authorization URL (idempotent)
-- `bitrix_revoke()` — drop stored user token
+- `bitrix_whoami()` — signed-in Bitrix24 user (email, id, name) and auth mode
 
 CRM statuses (shared loader + cache):
 
@@ -31,7 +29,7 @@ Curated reads:
 - `employees_list` / `employee_get` / `employees_search`
 - `telephony_calls_list` / `telephony_lines_list`
 
-Curated writes (require OAuth user identity; default `dry_run=true`):
+Curated writes (default `dry_run=true`):
 
 - `crm_item_add` / `crm_item_update`
 - `task_add` / `task_update`
@@ -44,6 +42,8 @@ Escape hatch:
 ### Breaking changes
 
 - Removed: `ask_bitrix`, `list_capabilities`, `crm_userfield_lookup`, `crm_userfields_export`
+- Removed: `bitrix_authorize`, `bitrix_revoke`, `MCP_BEARER_TOKEN`, `X-Bitrix-User-Email` /
+  `BITRIX_USER_EMAIL_HEADER` — authentication is OAuth 2.1 for MCP clients (see below)
 - Renamed: `call_bitrix_rest` → `bitrix_call`
 - `crm_describe_fields` now covers user-field lookup/export via `fieldNames` and `includeSystemFields=false`
 - Access control uses a method catalog + `BITRIX_ALLOWED_ACCESS` instead of suffix heuristics
@@ -73,42 +73,37 @@ BITRIX_ALLOW_UNKNOWN_METHODS="false"
 
 Other optional settings: `BITRIX_METHOD_CATALOG_PATH`, `BITRIX_PORTAL_METHODS_TTL_SECONDS`,
 `BITRIX_CRM_METADATA_TTL_SECONDS`, `BITRIX_REQUEST_TIMEOUT_SECONDS`, MCP host/port/transport/path,
-`MCP_BEARER_TOKEN`, `MCP_PUBLIC_BASE_URL`, Logfire flags.
+`MCP_PUBLIC_BASE_URL`, Logfire flags.
 
-## Per-user OAuth writes
+## Authentication (OAuth for Claude connectors)
 
 See the full production checklist: [docs/deploy.md](docs/deploy.md).
 
-Reads stay on the inbound webhook. Writes run as the LibreChat user after a one-time
-browser consent. LibreChat must send the authenticated user email in
-`X-Bitrix-User-Email` (or `BITRIX_USER_EMAIL_HEADER`).
-
-### Register a local application (with UI)
-
-In Bitrix24: **Applications → Developer resources → Other → Local application**.
-
-1. Do **not** enable “Application uses only API” — register **with an interface**
-   (needed for the `/bitrix/app` fallback placement page).
-2. Handler / `redirect_uri`: `https://<MCP_PUBLIC_BASE_URL>/oauth/callback`
-3. Scopes must cover at least what the webhook can do (crm, task, user, …).
-4. Put `client_id` / `client_secret` into env.
-
-### Enable on the server
+The server is its own OAuth 2.1 authorization server for MCP clients (DCR, PKCE,
+RFC 8414/9728 metadata) and proxies sign-in to a Bitrix24 local application
+(FastMCP `OAuthProxy`). Each request carries the user's Bitrix24 token, so **reads
+and writes run as the signed-in user** with their portal permissions. The webhook
+is only used for method discovery.
 
 ```dotenv
 BITRIX_OAUTH_ENABLED="true"
 BITRIX_OAUTH_CLIENT_ID="..."
 BITRIX_OAUTH_CLIENT_SECRET="..."
 BITRIX_PORTAL_URL="https://example.bitrix24.ru"
-BITRIX_TOKEN_DB_PATH="/data/tokens.db"
 BITRIX_TOKEN_ENCRYPTION_KEY="..."   # Fernet key
+BITRIX_TOKEN_DB_PATH="/data/tokens.db"
 BITRIX_ALLOWED_ACCESS="read,write"
-MCP_BEARER_TOKEN="required-when-oauth-on"
 MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
+MCP_TRANSPORT="streamable-http"
+MCP_PATH="/mcp"
 ```
 
-Portal `member_id` is learned from the first successful OAuth response and stored in
-SQLite — it is not an env variable.
+Bitrix24 local application (with UI): handler URL `https://<MCP_PUBLIC_BASE_URL>/oauth/callback`.
+In Claude: **Settings → Connectors → Add custom connector** → `https://<host>/mcp`.
+
+Portal `member_id` is pinned on the first sign-in. OAuth proxy state (client
+registrations, encrypted Bitrix24 tokens) lives in `BITRIX_OAUTH_STORAGE_DIR`
+(default: `oauth-proxy/` next to the token DB).
 
 Generate an encryption key:
 
@@ -121,7 +116,9 @@ With OAuth on:
 - Webhook writes are blocked unless `BITRIX_ALLOW_WEBHOOK_WRITES=true` (emergency only).
 - `OwnershipGuard` allows mutating only records the user is responsible for
   (`BITRIX_OWNERSHIP_ADMIN_EMAILS` bypasses ownership, not OAuth).
-- HTTP routes: `GET /oauth/callback`, `GET|POST /bitrix/app`, `GET /healthz`.
+
+With `BITRIX_OAUTH_ENABLED=false` the endpoint is unauthenticated and runs as the
+webhook — local development only.
 
 ## Method catalog
 
@@ -149,17 +146,6 @@ docker compose up --build
 # or production-style:
 docker compose -f docker-compose.server.yml up --build
 ```
-
-## Authentication
-
-Shared bearer token for public deployments:
-
-```dotenv
-MCP_BEARER_TOKEN="change-this-long-random-token"
-MCP_PUBLIC_BASE_URL="https://bitrix-mcp.example.com"
-```
-
-Clients send `Authorization: Bearer ...`. When `BITRIX_OAUTH_ENABLED=true`, bearer is **required**.
 
 ## Design notes
 

@@ -17,7 +17,6 @@ from bitrix_mcp.read_tools import (
     tasks_list_data,
     telephony_calls_list_data,
 )
-from bitrix_mcp.server import StaticBearerTokenVerifier
 
 
 class TTLCacheTests(unittest.TestCase):
@@ -87,18 +86,6 @@ class PeopleToolHelperTests(unittest.TestCase):
         self.assertEqual(normalize_task_status_filter('open'), {'!STATUS': 5})
         self.assertEqual(normalize_task_status_filter('completed'), {'STATUS': 5})
         self.assertEqual(normalize_task_status_filter(None), {})
-
-
-class StaticBearerTokenVerifierTests(unittest.IsolatedAsyncioTestCase):
-    async def test_accepts_expected_token(self) -> None:
-        verifier = StaticBearerTokenVerifier('secret')
-        token = await verifier.verify_token('secret')
-        self.assertIsNotNone(token)
-        self.assertEqual(token.client_id, 'static-bearer-token')
-
-    async def test_rejects_wrong_token(self) -> None:
-        verifier = StaticBearerTokenVerifier('secret')
-        self.assertIsNone(await verifier.verify_token('wrong'))
 
 
 class BitrixClientTests(unittest.IsolatedAsyncioTestCase):

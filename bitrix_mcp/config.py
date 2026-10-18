@@ -5,6 +5,8 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 from bitrix_mcp.oauth.store import TokenStore
 
 
@@ -106,7 +108,6 @@ class Settings:
     port: int
     transport: str
     path: str
-    bearer_token: str
     public_base_url: str
     request_timeout_seconds: float
     allowed_access: frozenset[str]
@@ -122,21 +123,21 @@ class Settings:
     oauth_client_id: str
     oauth_client_secret: str
     portal_url: str
-    user_email_header: str
     token_db_path: str
     token_encryption_key: str
+    oauth_storage_dir: str
+    jwt_signing_key: str
+    allowed_client_redirect_uris: tuple[str, ...]
     allow_webhook_writes: bool
     write_ownership: str
     ownership_admin_emails: frozenset[str]
     task_ownership_fields: tuple[str, ...]
-    auth_state_ttl_seconds: int
-    auth_wait_seconds: int
-    token_refresh_skew_seconds: int
 
     @classmethod
     def from_env(cls) -> Settings:
         load_env_file()
         transport = os.getenv('MCP_TRANSPORT', 'sse').strip().lower()
+        token_db_path = os.getenv('BITRIX_TOKEN_DB_PATH', '/data/tokens.db').strip() or '/data/tokens.db'
         default_path = '/sse' if transport == 'sse' else '/mcp'
         return cls(
             bitrix_webhook_url=os.getenv('BITRIX_WEBHOOK_URL', '').strip(),
@@ -144,7 +145,6 @@ class Settings:
             port=_env_int('MCP_PORT', 8000),
             transport=transport,
             path=os.getenv('MCP_PATH', default_path).strip(),
-            bearer_token=os.getenv('MCP_BEARER_TOKEN', '').strip(),
             public_base_url=os.getenv('MCP_PUBLIC_BASE_URL', '').strip(),
             request_timeout_seconds=float(os.getenv('BITRIX_REQUEST_TIMEOUT_SECONDS', '20')),
             allowed_access=_resolve_allowed_access(),
@@ -159,10 +159,12 @@ class Settings:
             oauth_client_id=os.getenv('BITRIX_OAUTH_CLIENT_ID', '').strip(),
             oauth_client_secret=os.getenv('BITRIX_OAUTH_CLIENT_SECRET', '').strip(),
             portal_url=os.getenv('BITRIX_PORTAL_URL', '').strip(),
-            user_email_header=os.getenv('BITRIX_USER_EMAIL_HEADER', 'X-Bitrix-User-Email').strip()
-            or 'X-Bitrix-User-Email',
-            token_db_path=os.getenv('BITRIX_TOKEN_DB_PATH', '/data/tokens.db').strip() or '/data/tokens.db',
+            token_db_path=token_db_path,
             token_encryption_key=os.getenv('BITRIX_TOKEN_ENCRYPTION_KEY', '').strip(),
+            oauth_storage_dir=os.getenv('BITRIX_OAUTH_STORAGE_DIR', '').strip()
+            or str(Path(token_db_path).parent / 'oauth-proxy'),
+            jwt_signing_key=os.getenv('MCP_JWT_SIGNING_KEY', '').strip(),
+            allowed_client_redirect_uris=_parse_csv(os.getenv('MCP_ALLOWED_CLIENT_REDIRECT_URIS'), ()),
             allow_webhook_writes=_env_bool('BITRIX_ALLOW_WEBHOOK_WRITES', False),
             write_ownership=os.getenv('BITRIX_WRITE_OWNERSHIP', 'strict').strip().lower() or 'strict',
             ownership_admin_emails=_parse_email_list(os.getenv('BITRIX_OWNERSHIP_ADMIN_EMAILS')),
@@ -170,9 +172,6 @@ class Settings:
                 os.getenv('BITRIX_TASK_OWNERSHIP_FIELDS'),
                 ('RESPONSIBLE_ID',),
             ),
-            auth_state_ttl_seconds=_env_int('BITRIX_AUTH_STATE_TTL_SECONDS', 900),
-            auth_wait_seconds=_env_int('BITRIX_AUTH_WAIT_SECONDS', 120),
-            token_refresh_skew_seconds=_env_int('BITRIX_TOKEN_REFRESH_SKEW_SECONDS', 300),
         )
 
     @property
@@ -209,10 +208,13 @@ class Settings:
                 missing.append('BITRIX_PORTAL_URL must start with http:// or https://')
             if not self.token_encryption_key:
                 missing.append('BITRIX_TOKEN_ENCRYPTION_KEY')
+            else:
+                try:
+                    Fernet(self.token_encryption_key.encode('utf-8'))
+                except (ValueError, TypeError):
+                    missing.append('BITRIX_TOKEN_ENCRYPTION_KEY must be a valid Fernet key')
             if not self.public_base_url:
                 missing.append('MCP_PUBLIC_BASE_URL')
-            if not self.bearer_token:
-                missing.append('MCP_BEARER_TOKEN (required when BITRIX_OAUTH_ENABLED=true)')
 
         if missing:
             names = ', '.join(missing)

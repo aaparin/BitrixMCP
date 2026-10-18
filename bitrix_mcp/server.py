@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import secrets
 import warnings
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import logfire
 from fastmcp import Context, FastMCP
-from fastmcp.server.auth import AccessToken, TokenVerifier
 
 from bitrix_mcp.bitrix import BitrixClient
 from bitrix_mcp.config import Settings
@@ -35,17 +32,6 @@ from bitrix_mcp.read_tools import (
     telephony_calls_list_data,
     telephony_lines_list_data,
 )
-
-
-class StaticBearerTokenVerifier(TokenVerifier):
-    def __init__(self, token: str, *, base_url: str | None = None):
-        super().__init__(base_url=base_url or None)
-        self.token = token
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        if not secrets.compare_digest(token, self.token):
-            return None
-        return AccessToken(token=token, client_id='static-bearer-token', scopes=[])
 
 
 def configure_logfire(settings: Settings) -> None:
@@ -94,18 +80,10 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             stacklevel=2,
         )
 
-    from bitrix_mcp.oauth.flow import OAuthFlow
-    from bitrix_mcp.oauth.refresh import RefreshCoordinator
-    from bitrix_mcp.oauth.resolver import (
-        IdentityResolver,
-        extract_request_email,
-        fetch_user_profile,
-        profile_display_name,
-    )
-    from bitrix_mcp.oauth.routes import register_oauth_routes
+    from bitrix_mcp.oauth.resolver import IdentityResolver, fetch_user_profile, profile_display_name
+    from bitrix_mcp.oauth.routes import register_healthz, register_oauth_routes
     from bitrix_mcp.oauth.runtime import OAuthRuntime
     from bitrix_mcp.oauth.store import TokenStore
-    from bitrix_mcp.oauth.wait import AuthWaitRegistry
     from bitrix_mcp.ownership import OwnershipGuard, default_ownership_rules
     from bitrix_mcp.write_tools import (
         activity_add_data,
@@ -116,26 +94,35 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     )
 
     store = None
-    flow = None
-    wait_registry = None
-    refresh = None
+    auth = None
     if settings.oauth_enabled:
-        store = TokenStore(settings.token_db_path, settings.token_encryption_key)
-        wait_registry = AuthWaitRegistry()
-        flow = OAuthFlow(
+        from bitrix_mcp.oauth.provider import BitrixOAuthProvider
+
+        store = TokenStore(settings.token_db_path)
+        auth = BitrixOAuthProvider(
+            portal_url=settings.portal_url,
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
-            portal_url=settings.portal_url,
+            base_url=settings.public_base_url,
             store=store,
-            wait_registry=wait_registry,
-            auth_state_ttl_seconds=settings.auth_state_ttl_seconds,
+            storage_dir=settings.oauth_storage_dir,
+            storage_encryption_key=settings.token_encryption_key,
+            jwt_signing_key=settings.jwt_signing_key or None,
+            allowed_client_redirect_uris=list(settings.allowed_client_redirect_uris) or None,
+            timeout=settings.request_timeout_seconds,
         )
-        refresh = RefreshCoordinator(store, flow, skew_seconds=settings.token_refresh_skew_seconds)
         admin_count = len(settings.ownership_admin_emails)
         admin_domains = sorted({email.split('@')[-1] for email in settings.ownership_admin_emails if '@' in email})
         print(
             f'OAuth enabled: ownership admins={admin_count}'
             + (f' domains={admin_domains}' if admin_domains else '')
+        )
+    else:
+        warnings.warn(
+            'BITRIX_OAUTH_ENABLED=false: the MCP endpoint has no authentication and every request '
+            'runs as the inbound webhook. Use only for local development.',
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     ownership_guard = OwnershipGuard(
@@ -152,27 +139,17 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     )
     resolver = IdentityResolver(
         webhook_url=settings.bitrix_webhook_url,
-        store=store,
-        refresh=refresh,
         oauth_enabled=settings.oauth_enabled,
     )
     runtime = OAuthRuntime(
         settings=settings,
         store=store,
-        flow=flow,
         resolver=resolver,
-        wait_registry=wait_registry,
         policy=policy,
         ownership_guard=ownership_guard,
         webhook_client=bitrix,
     )
     availability = AvailabilityProvider(bitrix, cache=PORTAL_METHODS_CACHE)
-
-    auth = (
-        StaticBearerTokenVerifier(settings.bearer_token, base_url=settings.public_base_url or None)
-        if settings.bearer_token
-        else None
-    )
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP):
@@ -188,7 +165,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             'Prefer curated tools for CRM, tasks, activities, employees, and telephony. '
             'Read CRM status dictionaries from resource bitrix://crm/statuses '
             '(or bitrix://crm/statuses/{entity_id}). '
-            'Writes require per-user OAuth: use bitrix_whoami / bitrix_authorize. '
+            'Every call runs as the signed-in Bitrix24 user; bitrix_whoami shows who that is. '
             'Write tools default to dry_run=true; set dry_run=false to commit. '
             'OwnershipGuard allows updates only for records you are responsible for '
             '(unless configured as an ownership admin). '
@@ -198,27 +175,16 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         lifespan=lifespan,
     )
 
-    if settings.oauth_enabled and flow is not None and store is not None and wait_registry is not None:
+    if settings.oauth_enabled:
         register_oauth_routes(
             server,
-            flow=flow,
-            store=store,
-            wait_registry=wait_registry,
-            webhook_client_factory=lambda: bitrix,
-            policy=policy,
+            mcp_url=settings.public_base_url.rstrip('/') + settings.path,
         )
     else:
-        @server.custom_route('/healthz', methods=['GET'])
-        async def healthz(_request):  # type: ignore[no-untyped-def]
-            from starlette.responses import PlainTextResponse
+        register_healthz(server)
 
-            return PlainTextResponse('ok')
-
-    async def bitrix_client(ctx: Context | None = None) -> BitrixClient:
-        resolved = await runtime.resolve_from_request()
-        if resolved.mode == 'oauth':
-            return runtime.client_for(resolved.identity)
-        return bitrix
+    async def bitrix_client() -> BitrixClient:
+        return runtime.client_for_request()
 
     @server.resource(
         'bitrix://crm/statuses',
@@ -539,7 +505,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     ) -> dict[str, Any]:
         """Call a Bitrix24 REST method directly. Access is enforced by MethodPolicy (default: read only)."""
         parsed_params = parse_object_input(params, name='params')
-        ensured = await runtime.ensure_write_identity(method=method, params=parsed_params, ctx=ctx)
+        ensured = runtime.ensure_write_identity(method=method, params=parsed_params)
         if isinstance(ensured, dict):
             return ensured
         client = runtime.client_for(ensured.identity) if ensured.mode == 'oauth' else bitrix
@@ -585,16 +551,18 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         return payload if isinstance(payload, dict) else {'result': payload}
 
     async def _write_client(method: str, params: dict[str, Any], ctx: Context | None):
-        ensured = await runtime.ensure_write_identity(method=method, params=params, ctx=ctx)
+        _ = ctx
+        ensured = runtime.ensure_write_identity(method=method, params=params)
         if isinstance(ensured, dict):
             return ensured, None
-        return ensured, runtime.client_for(ensured.identity)
+        client = runtime.client_for(ensured.identity) if ensured.mode == 'oauth' else bitrix
+        return ensured, client
 
     @server.tool
     async def bitrix_whoami(ctx: Context | None = None) -> dict[str, Any]:
         """Show the current Bitrix identity: email, user id, auth status, and token expiry."""
         _ = ctx
-        resolved = await runtime.resolve_from_request()
+        resolved = runtime.resolve_from_request()
         display_name = resolved.display_name
         if resolved.mode == 'oauth' and not display_name:
             try:
@@ -610,69 +578,6 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             'authorized': resolved.mode == 'oauth',
             'tokenExpiresAt': resolved.token_expires_at,
             'oauthEnabled': settings.oauth_enabled,
-        }
-
-    @server.tool
-    async def bitrix_authorize(ctx: Context | None = None) -> dict[str, Any]:
-        """Return a Bitrix24 authorization link for the current chat user (idempotent)."""
-        _ = ctx
-        if not settings.oauth_enabled or flow is None:
-            return {
-                'error': 'oauth_disabled',
-                'message': 'Per-user OAuth is disabled on this server.',
-            }
-        email = extract_request_email(settings.user_email_header)
-        if not email:
-            return {
-                'error': 'identity_missing',
-                'message': (
-                    f'Missing {settings.user_email_header} header. '
-                    'Authorization requires an authenticated user email.'
-                ),
-            }
-        resolved = await resolver.resolve(email)
-        if resolved.mode == 'oauth':
-            return {
-                'authorized': True,
-                'email': resolved.email,
-                'bitrixUserId': resolved.bitrix_user_id,
-                'tokenExpiresAt': resolved.token_expires_at,
-                'message': 'Already authorized. Write tools can run as this user.',
-            }
-        state, authorize_url = await flow.begin_authorization(email)
-        return {
-            'authorized': False,
-            'email': email,
-            'authorizeUrl': authorize_url,
-            'state': state,
-            'expiresInSeconds': settings.auth_state_ttl_seconds,
-            'message': 'Open the authorizeUrl in a browser to connect your Bitrix24 account.',
-        }
-
-    @server.tool
-    async def bitrix_revoke(ctx: Context | None = None) -> dict[str, Any]:
-        """Revoke the stored OAuth token for the current chat user."""
-        _ = ctx
-        if not settings.oauth_enabled or store is None:
-            return {
-                'error': 'oauth_disabled',
-                'message': 'Per-user OAuth is disabled on this server.',
-            }
-        email = extract_request_email(settings.user_email_header)
-        if not email:
-            return {
-                'error': 'identity_missing',
-                'message': f'Missing {settings.user_email_header} header.',
-            }
-        token = await asyncio.to_thread(store.get_by_email, email)
-        if token is None:
-            return {'revoked': False, 'email': email, 'message': 'No active token found for this user.'}
-        await asyncio.to_thread(store.mark_revoked, token.member_id, token.bitrix_user_id)
-        return {
-            'revoked': True,
-            'email': email,
-            'bitrixUserId': token.bitrix_user_id,
-            'message': 'Token revoked. Call bitrix_authorize to reconnect.',
         }
 
     @server.tool

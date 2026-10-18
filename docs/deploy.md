@@ -1,9 +1,34 @@
 # Deploy & configure BitrixMCP (production)
 
 This guide covers a public HTTPS deployment with `docker-compose.server.yml`,
-Bitrix24 webhook + local application OAuth, and LibreChat.
+a Bitrix24 local application, and connecting the server to Claude
+(Cowork / claude.ai / Claude Desktop) as a custom connector.
 
 Example host used below: `https://mcpbitrix.dev.itcoll.com`
+
+---
+
+## How authorization works
+
+```
+Claude ──(OAuth 2.1: DCR + PKCE)──► BitrixMCP (OAuth proxy) ──(OAuth 2.0)──► Bitrix24 portal
+```
+
+- BitrixMCP is the OAuth authorization server for MCP clients. It implements
+  dynamic client registration, PKCE and RFC 8414 / RFC 9728 metadata, which
+  Bitrix24 OAuth does not offer (FastMCP `OAuthProxy`).
+- When a user adds the connector, Claude opens BitrixMCP's `/authorize`. After a
+  consent page the user is sent to the portal's `/oauth/authorize/`, signs in to
+  Bitrix24, and Bitrix24 redirects back to `/oauth/callback`.
+- BitrixMCP exchanges the code at `oauth.bitrix.info`, stores the Bitrix24 tokens
+  (encrypted) and gives Claude its own short-lived JWT + refresh token. Bitrix24
+  token refresh is handled server-side.
+- Every MCP request is validated with `user.current` under the user's Bitrix24
+  token. **All tools — reads and writes — run as that user**, with their portal
+  permissions. The inbound webhook is used only for method discovery
+  (`methods` / `scope`).
+- The portal `member_id` is pinned on the first successful sign-in; tokens from
+  another portal are rejected.
 
 ---
 
@@ -11,10 +36,17 @@ Example host used below: `https://mcpbitrix.dev.itcoll.com`
 
 | URL | Purpose |
 |---|---|
-| `https://mcpbitrix.dev.itcoll.com/mcp` | MCP endpoint (LibreChat) |
-| `https://mcpbitrix.dev.itcoll.com/oauth/callback` | OAuth redirect from Bitrix24 |
-| `https://mcpbitrix.dev.itcoll.com/bitrix/app` | Fallback in-portal app page |
-| `https://mcpbitrix.dev.itcoll.com/healthz` | Liveness check |
+| `/mcp` | MCP endpoint (Streamable HTTP) |
+| `/.well-known/oauth-protected-resource/mcp` | Resource metadata (RFC 9728) |
+| `/.well-known/oauth-authorization-server` | Authorization server metadata (RFC 8414) |
+| `/register` | Dynamic client registration |
+| `/authorize`, `/consent`, `/token` | OAuth endpoints for MCP clients |
+| `/oauth/callback` | GET: redirect from Bitrix24. POST: in-portal app page |
+| `/bitrix/app` | In-portal app page |
+| `/healthz` | Liveness check |
+
+Simplest: proxy the whole host to the container (port 8000). Do not buffer
+`/mcp` responses (Streamable HTTP may use SSE).
 
 `MCP_PUBLIC_BASE_URL` must be the **origin only**:
 
@@ -22,76 +54,51 @@ Example host used below: `https://mcpbitrix.dev.itcoll.com`
 MCP_PUBLIC_BASE_URL="https://mcpbitrix.dev.itcoll.com"
 ```
 
-Do **not** append `/mcp`. The OAuth callback is `/oauth/callback` on the host root,
-not under `/mcp`.
-
-Proxy `/mcp`, `/oauth/`, `/bitrix/`, and `/healthz` to the container (port 8000).
-
-Smoke check:
+Smoke checks:
 
 ```bash
 curl -sS https://mcpbitrix.dev.itcoll.com/healthz
-# expected: ok
+curl -sS https://mcpbitrix.dev.itcoll.com/.well-known/oauth-protected-resource/mcp
 ```
 
 ---
 
-## 2. Bitrix24 inbound webhook (reads)
+## 2. Bitrix24 inbound webhook (method discovery)
 
 1. Bitrix24 → **Developer resources** → **Other** → **Inbound webhook**.
-2. Grant scopes needed for CRM, tasks, users, etc.
-3. Copy the URL:
-
-```text
-https://<portal>.bitrix24.ru/rest/<user_id>/<token>/
-```
-
-Store it as `BITRIX_WEBHOOK_URL`.
+2. Grant the same scopes as the application.
+3. Store the URL as `BITRIX_WEBHOOK_URL`.
 
 ---
 
-## 3. Bitrix24 local application (per-user writes)
+## 3. Bitrix24 local application
 
 1. **Applications → Developer resources → Other → Local application**.
-2. Do **not** enable “Application uses only API” — register **with a UI**
-   (needed for `/bitrix/app`).
-3. Handler / redirect URI:
+2. Register **with a UI** (do not enable “Application uses only API”).
+3. Handler path:
 
 ```text
 https://mcpbitrix.dev.itcoll.com/oauth/callback
 ```
 
-4. Optional application URL (placement / self-service):
-
-```text
-https://mcpbitrix.dev.itcoll.com/bitrix/app
-```
-
-5. Scopes must cover at least what the webhook can do, for example:
-   `crm, task, tasks, user, department, calendar, im, …`
-6. Copy:
-   - Application ID → `BITRIX_OAUTH_CLIENT_ID`
-   - Application key → `BITRIX_OAUTH_CLIENT_SECRET`
+   Bitrix24 sends the OAuth redirect (GET) and the in-portal app/installation
+   frames (POST) to this URL; BitrixMCP serves both.
+4. Scopes: everything the tools need, e.g. `crm, task, tasks, user, department, telephony, …`.
+5. Copy Application ID → `BITRIX_OAUTH_CLIENT_ID`, Application key → `BITRIX_OAUTH_CLIENT_SECRET`.
 
 `BITRIX_PORTAL_URL` is the portal origin, e.g. `https://company.bitrix24.ru`.
 
-Portal `member_id` is **not** configured in env. It is returned by Bitrix24 on the
-first successful OAuth (or placement) and pinned in SQLite (`portal_settings`).
-Later callbacks from a different portal are rejected.
-
 ---
 
-## 4. Generate secrets on the server
-
-In the compose project directory:
+## 4. Generate secrets
 
 ```bash
-# MCP bearer token
-openssl rand -hex 32
-
-# Fernet key for encrypting stored OAuth tokens
+# Fernet key for encrypting stored OAuth state
 docker compose -f docker-compose.server.yml run --rm bitrix-mcp \
   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Optional: separate JWT signing key (otherwise derived from the client secret)
+openssl rand -hex 32
 ```
 
 ---
@@ -99,72 +106,58 @@ docker compose -f docker-compose.server.yml run --rm bitrix-mcp \
 ## 5. Write `.env` next to `docker-compose.server.yml`
 
 ```dotenv
-# --- Bitrix read (webhook) ---
 BITRIX_WEBHOOK_URL="https://YOUR_PORTAL.bitrix24.ru/rest/1/XXXXXXXX/"
-
-# --- MCP ---
-MCP_BEARER_TOKEN="paste_openssl_rand_hex_32"
 MCP_PUBLIC_BASE_URL="https://mcpbitrix.dev.itcoll.com"
-
-# Writes require write in the access policy
 BITRIX_ALLOWED_ACCESS="read,write"
 
-# --- OAuth (per-user writes) ---
 BITRIX_OAUTH_ENABLED="true"
 BITRIX_OAUTH_CLIENT_ID="from_local_application"
 BITRIX_OAUTH_CLIENT_SECRET="from_local_application"
 BITRIX_PORTAL_URL="https://YOUR_PORTAL.bitrix24.ru"
 BITRIX_TOKEN_ENCRYPTION_KEY="fernet_key_from_step_4"
-# Token DB path is set in compose to /data/tokens.db (named volume)
 
 # Optional
-# BITRIX_USER_EMAIL_HEADER="X-Bitrix-User-Email"
+# MCP_JWT_SIGNING_KEY="openssl_rand_hex_32"
+# MCP_ALLOWED_CLIENT_REDIRECT_URIS="https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback"
 # BITRIX_OWNERSHIP_ADMIN_EMAILS="admin@company.ru"
-# BITRIX_AUTH_WAIT_SECONDS="120"
 ```
 
-| Secret | Where |
-|---|---|
-| Webhook URL | `.env` → `BITRIX_WEBHOOK_URL` |
-| App client_id / client_secret | `.env` → `BITRIX_OAUTH_CLIENT_*` |
-| Bearer | `.env` → `MCP_BEARER_TOKEN` **and** LibreChat MCP config |
-| Fernet key | `.env` → `BITRIX_TOKEN_ENCRYPTION_KEY` (server only) |
+State lives on the `/data` volume:
 
-Restart:
+- `/data/tokens.db` — pinned portal + write audit log
+- `/data/oauth-proxy/` — client registrations and Bitrix24 tokens (Fernet-encrypted)
+
+Keep the volume, `BITRIX_TOKEN_ENCRYPTION_KEY` and the JWT key stable — losing
+any of them signs every user out (they reconnect the connector).
 
 ```bash
 docker compose -f docker-compose.server.yml up -d --build
 docker logs bitrix-mcp --tail 50
 ```
 
-With OAuth on you should see `OAuth enabled: …`. Missing required vars abort startup
-with `Missing or invalid configuration: …`.
+You should see `OAuth enabled: …`.
 
 ---
 
-## 6. LibreChat
+## 6. Connect Claude
+
+Claude (Cowork / claude.ai / Desktop) → **Settings → Connectors → Add custom connector**:
 
 - **URL:** `https://mcpbitrix.dev.itcoll.com/mcp`
-- **Authorization:** `Bearer <same MCP_BEARER_TOKEN>`
-- User identity header (required for writes):
+- Leave OAuth client ID / secret empty — Claude registers itself via DCR.
 
-```http
-X-Bitrix-User-Email: user@company.ru
-```
-
-LDAP login must match the Bitrix24 user email. Without the header, reads use the
-webhook; writes return `identity_missing` / ask for authorization.
+On **Connect** Claude opens the consent page, then the Bitrix24 sign-in; after
+approving, the connector is ready. Each user connects with their own Bitrix24 account.
+On Team / Enterprise plans an owner adds the connector once for the organization;
+each member still signs in individually.
 
 ---
 
 ## 7. End-to-end check
 
-1. `curl https://mcpbitrix.dev.itcoll.com/healthz` → `ok`
-2. In chat: `bitrix_whoami` → email / mode
-3. Any write tool or `bitrix_authorize` → authorization link
-4. Open the link → redirect to `/oauth/callback` → **Connected**
-5. Pending write continues (or retry works immediately)
-6. Prefer `dry_run=true` first, then `dry_run=false`
+1. `bitrix_whoami` → your Bitrix24 user, `mode: oauth`
+2. A read tool (e.g. `crm_items_list`) returns only what you can see in Bitrix24
+3. A write tool with `dry_run=true`, then `dry_run=false`
 
 ---
 
@@ -172,20 +165,8 @@ webhook; writes return `identity_missing` / ask for authorization.
 
 | Symptom | Likely cause |
 |---|---|
-| Callback 404 | Proxy only forwards `/mcp`; open `/oauth/*` |
-| redirect_uri mismatch | App redirect must be exactly `…/oauth/callback` |
-| Startup fails with bearer missing | `MCP_BEARER_TOKEN` required when OAuth is on |
-| Email mismatch page | Browser Bitrix session ≠ LibreChat email |
+| Connector says it can't reach / authorize | `/.well-known/*`, `/register`, `/authorize`, `/token` not proxied |
+| Bitrix24 shows redirect_uri error | Application handler is not on the `MCP_PUBLIC_BASE_URL` host |
+| “Token exchange … failed” page | Wrong client secret, or portal `member_id` differs from the pinned one |
 | Write `forbidden` | `BITRIX_ALLOWED_ACCESS` still `read` only |
-| Tokens unreadable after restart | Lost / changed `BITRIX_TOKEN_ENCRYPTION_KEY` — users re-authorize |
-
----
-
-## 9. Compose notes
-
-`docker-compose.server.yml`:
-
-- Loads `.env`
-- Forces `MCP_TRANSPORT=streamable-http`, `MCP_PATH=/mcp`
-- Persists OAuth SQLite at `/data/tokens.db` via volume `bitrix-mcp-data`
-- Joins external network `librechat_default` (adjust if your stack differs)
+| Everyone signed out after redeploy | `/data` volume, encryption key, or JWT key changed |
