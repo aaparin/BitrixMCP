@@ -296,7 +296,17 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         order: dict[str, Any] | str | None = None,
         start: int = 0,
     ) -> dict[str, Any]:
-        """List smart-process CRM types and their entityTypeId values."""
+        """List SMART-PROCESS CRM types and their entityTypeId values.
+
+        Smart processes only — the ones this portal defined for itself. The
+        built-in entities are NOT here and do not need to be discovered: `lead`,
+        `deal`, `contact`, `company`, `quote` and `invoice` always exist and are
+        passed to the other tools by those names.
+
+        An empty result, or one without something that sounds like what you were
+        asked for, therefore means "this portal has no such smart process" — not
+        "this portal has no invoices".
+        """
         return await crm_types_list_data(
             await bitrix_client(),
             filter=filter,

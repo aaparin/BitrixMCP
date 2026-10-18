@@ -46,6 +46,19 @@ ENTITY_ALIASES = {
     'CONTACTS': 'CONTACT',
     'CRM_QUOTE': 'QUOTE',
     'QUOTES': 'QUOTE',
+    'INVOICES': 'INVOICE',
+    'CRM_INVOICE': 'INVOICE',
+    'SMART_INVOICE': 'INVOICE',
+}
+
+#: Entities that `crm.item.*` serves but that have no legacy `crm.<name>.fields`
+#: method of their own. Without them `crm_items_list` accepts a name that
+#: `crm_describe_fields` then rejects as unsupported — so a caller that lists
+#: invoices and asks what their fields are is punished for doing the right thing
+#: in the right order. They are described through `crm.item.fields`, exactly as
+#: smart processes are.
+ITEM_ONLY_ENTITY_TYPE_IDS = {
+    'INVOICE': 31,
 }
 
 
@@ -153,9 +166,21 @@ async def resolve_crm_entity(bitrix: BitrixClient, entity: str) -> dict[str, Any
     if normalized in STATIC_CRM_ENTITIES:
         return {'name': normalized, 'kind': 'static', **STATIC_CRM_ENTITIES[normalized]}
 
+    item_only = ITEM_ONLY_ENTITY_TYPE_IDS.get(normalized)
+    if item_only is not None:
+        # Described through crm.item.fields, like a smart process: this entity
+        # has no legacy fields method, but crm.item.* knows it perfectly well.
+        return {'name': normalized, 'kind': 'dynamic', 'entityTypeId': item_only}
+
     match = re.fullmatch(r'(?:CRM_)?DYNAMIC_(\d+)', normalized)
     if not match:
-        raise BitrixApiError(f'Unsupported CRM entity "{entity}".')
+        supported = ', '.join(
+            sorted([*STATIC_CRM_ENTITIES, *ITEM_ONLY_ENTITY_TYPE_IDS])
+        ).lower()
+        raise BitrixApiError(
+            f'Unsupported CRM entity "{entity}". Use one of: {supported}, '
+            'or DYNAMIC_<entityTypeId> for a smart process.'
+        )
 
     requested_id = int(match.group(1))
     types = await paginate_bitrix_list(bitrix, 'crm.type.list', {})
