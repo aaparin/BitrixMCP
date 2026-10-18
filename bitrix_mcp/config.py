@@ -184,7 +184,7 @@ class Settings:
 
     def validate_for_run(self) -> None:
         missing: list[str] = []
-        if not self.bitrix_webhook_url:
+        if not self.oauth_enabled and not self.bitrix_webhook_url:
             missing.append('BITRIX_WEBHOOK_URL')
         if self.transport not in {'sse', 'http', 'streamable-http'}:
             missing.append('MCP_TRANSPORT must be one of: sse, http, streamable-http')

@@ -33,14 +33,17 @@ class IdentityResolver:
 
     def __init__(self, *, webhook_url: str, oauth_enabled: bool):
         self.oauth_enabled = oauth_enabled
-        self._webhook = WebhookIdentity(webhook_url)
+        self._webhook = WebhookIdentity(webhook_url) if not oauth_enabled else None
 
     def resolve(self, access_token: AccessToken | None) -> ResolvedIdentity:
-        if not self.oauth_enabled or access_token is None:
+        if not self.oauth_enabled:
+            assert self._webhook is not None
             return ResolvedIdentity(identity=self._webhook, email=None, mode='webhook')
+        if access_token is None:
+            raise RuntimeError('Bitrix24 OAuth authentication is required.')
         identity = identity_from_access_token(access_token)
         if identity is None:
-            return ResolvedIdentity(identity=self._webhook, email=None, mode='webhook')
+            raise RuntimeError('Bitrix24 OAuth token has no user identity.')
         return ResolvedIdentity(
             identity=identity,
             email=identity.email,

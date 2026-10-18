@@ -55,7 +55,7 @@ Escape hatch:
 cp .env.example .env
 ```
 
-Required:
+Only for unauthenticated local development:
 
 ```dotenv
 BITRIX_WEBHOOK_URL="https://example.bitrix24.ru/rest/1/xxxxxxxxxxxxxxx/"
@@ -82,8 +82,8 @@ See the full production checklist: [docs/deploy.md](docs/deploy.md).
 The server is its own OAuth 2.1 authorization server for MCP clients (DCR, PKCE,
 RFC 8414/9728 metadata) and proxies sign-in to a Bitrix24 local application
 (FastMCP `OAuthProxy`). Each request carries the user's Bitrix24 token, so **reads
-and writes run as the signed-in user** with their portal permissions. The webhook
-is only used for method discovery.
+and writes run as the signed-in user** with their portal permissions. Method
+discovery also runs under that user's token; no inbound webhook is needed.
 
 ```dotenv
 BITRIX_OAUTH_ENABLED="true"
@@ -113,7 +113,6 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 With OAuth on:
 
-- Webhook writes are blocked unless `BITRIX_ALLOW_WEBHOOK_WRITES=true` (emergency only).
 - `OwnershipGuard` allows mutating only records the user is responsible for
   (`BITRIX_OWNERSHIP_ADMIN_EMAILS` bypasses ownership, not OAuth).
 

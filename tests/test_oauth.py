@@ -154,9 +154,10 @@ class IdentityResolutionTests(unittest.TestCase):
         self.assertEqual(identity.auth_params(), {'auth': 'AT'})
         self.assertEqual(identity.request_url('user.current'), 'https://ex.bitrix24.ru/rest/user.current.json')
 
-    def test_resolver_falls_back_to_webhook_without_token(self) -> None:
-        resolver = IdentityResolver(webhook_url='https://ex.bitrix24.ru/rest/1/abc/', oauth_enabled=True)
-        self.assertEqual(resolver.resolve(None).mode, 'webhook')
+    def test_resolver_requires_user_token_in_oauth_mode(self) -> None:
+        resolver = IdentityResolver(webhook_url='', oauth_enabled=True)
+        with self.assertRaisesRegex(RuntimeError, 'authentication is required'):
+            resolver.resolve(None)
         self.assertEqual(resolver.resolve(self._access_token()).mode, 'oauth')
 
     def test_resolver_ignores_token_when_oauth_disabled(self) -> None:

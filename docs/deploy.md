@@ -1,8 +1,7 @@
 # Deploy & configure BitrixMCP (production)
 
 This guide covers a public HTTPS deployment with `docker-compose.server.yml`,
-a Bitrix24 local application, and connecting the server to Claude
-(Cowork / claude.ai / Claude Desktop) as a custom connector.
+a Bitrix24 local application, and connecting the server to Claude Cowork or ChatGPT.
 
 Example host used below: `https://mcpbitrix.dev.itcoll.com`
 
@@ -11,22 +10,21 @@ Example host used below: `https://mcpbitrix.dev.itcoll.com`
 ## How authorization works
 
 ```
-Claude ──(OAuth 2.1: DCR + PKCE)──► BitrixMCP (OAuth proxy) ──(OAuth 2.0)──► Bitrix24 portal
+MCP client ──(OAuth 2.1: DCR + PKCE)──► BitrixMCP (OAuth proxy) ──(OAuth 2.0)──► Bitrix24 portal
 ```
 
 - BitrixMCP is the OAuth authorization server for MCP clients. It implements
   dynamic client registration, PKCE and RFC 8414 / RFC 9728 metadata, which
   Bitrix24 OAuth does not offer (FastMCP `OAuthProxy`).
-- When a user adds the connector, Claude opens BitrixMCP's `/authorize`. After a
+- When a user adds the connector, the MCP client opens BitrixMCP's `/authorize`. After a
   consent page the user is sent to the portal's `/oauth/authorize/`, signs in to
   Bitrix24, and Bitrix24 redirects back to `/oauth/callback`.
 - BitrixMCP exchanges the code at `oauth.bitrix.info`, stores the Bitrix24 tokens
-  (encrypted) and gives Claude its own short-lived JWT + refresh token. Bitrix24
+  (encrypted) and gives the MCP client its own short-lived JWT + refresh token. Bitrix24
   token refresh is handled server-side.
 - Every MCP request is validated with `user.current` under the user's Bitrix24
-  token. **All tools — reads and writes — run as that user**, with their portal
-  permissions. The inbound webhook is used only for method discovery
-  (`methods` / `scope`).
+  token. **All tools, including method discovery (`methods` / `scope`), run as
+  that user** with their portal permissions. No inbound webhook is needed.
 - The portal `member_id` is pinned on the first successful sign-in; tokens from
   another portal are rejected.
 
@@ -63,19 +61,11 @@ curl -sS https://mcpbitrix.dev.itcoll.com/.well-known/oauth-protected-resource/m
 
 ---
 
-## 2. Bitrix24 inbound webhook (method discovery)
+## 2. Bitrix24 local application
 
-1. Bitrix24 → **Developer resources** → **Other** → **Inbound webhook**.
-2. Grant the same scopes as the application.
-3. Store the URL as `BITRIX_WEBHOOK_URL`.
-
----
-
-## 3. Bitrix24 local application
-
-1. **Applications → Developer resources → Other → Local application**.
-2. Register **with a UI** (do not enable “Application uses only API”).
-3. Handler path:
+1. In `https://bitrix24.dreamsite.lt`, open **Applications → Developer resources → Other → Local application** as an administrator.
+2. Choose **Server** and register **with a UI** (leave “Uses API only” off). Leave **Initial installation path** empty and **Application completes the installation itself** off.
+3. Set **Your handler path** to:
 
 ```text
 https://mcpbitrix.dev.itcoll.com/oauth/callback
@@ -83,14 +73,14 @@ https://mcpbitrix.dev.itcoll.com/oauth/callback
 
    Bitrix24 sends the OAuth redirect (GET) and the in-portal app/installation
    frames (POST) to this URL; BitrixMCP serves both.
-4. Scopes: everything the tools need, e.g. `crm, task, tasks, user, department, telephony, …`.
+4. Scopes: everything the tools need, e.g. CRM, tasks, users, departments and telephony. Bitrix24 still applies each signed-in user's own permissions.
 5. Copy Application ID → `BITRIX_OAUTH_CLIENT_ID`, Application key → `BITRIX_OAUTH_CLIENT_SECRET`.
 
-`BITRIX_PORTAL_URL` is the portal origin, e.g. `https://company.bitrix24.ru`.
+`BITRIX_PORTAL_URL` is the portal origin: `https://bitrix24.dreamsite.lt`.
 
 ---
 
-## 4. Generate secrets
+## 3. Generate secrets
 
 ```bash
 # Fernet key for encrypting stored OAuth state
@@ -103,17 +93,16 @@ openssl rand -hex 32
 
 ---
 
-## 5. Write `.env` next to `docker-compose.server.yml`
+## 4. Write `.env` next to `docker-compose.server.yml`
 
 ```dotenv
-BITRIX_WEBHOOK_URL="https://YOUR_PORTAL.bitrix24.ru/rest/1/XXXXXXXX/"
 MCP_PUBLIC_BASE_URL="https://mcpbitrix.dev.itcoll.com"
 BITRIX_ALLOWED_ACCESS="read,write"
 
 BITRIX_OAUTH_ENABLED="true"
 BITRIX_OAUTH_CLIENT_ID="from_local_application"
 BITRIX_OAUTH_CLIENT_SECRET="from_local_application"
-BITRIX_PORTAL_URL="https://YOUR_PORTAL.bitrix24.ru"
+BITRIX_PORTAL_URL="https://bitrix24.dreamsite.lt"
 BITRIX_TOKEN_ENCRYPTION_KEY="fernet_key_from_step_4"
 
 # Optional
@@ -139,17 +128,23 @@ You should see `OAuth enabled: …`.
 
 ---
 
-## 6. Connect Claude
+## 5. Connect Claude
 
-Claude (Cowork / claude.ai / Desktop) → **Settings → Connectors → Add custom connector**:
+Claude Pro/Max: **Customize → Connectors → + Add → Add custom connector**. On Team/Enterprise, an owner first adds it under **Organization settings → Connectors → Add → Custom → Web**; members then connect under **Customize → Connectors**.
 
 - **URL:** `https://mcpbitrix.dev.itcoll.com/mcp`
-- Leave OAuth client ID / secret empty — Claude registers itself via DCR.
+- Choose OAuth sign-in and **Register automatically** as the OAuth client. Leave request headers empty.
 
 On **Connect** Claude opens the consent page, then the Bitrix24 sign-in; after
 approving, the connector is ready. Each user connects with their own Bitrix24 account.
 On Team / Enterprise plans an owner adds the connector once for the organization;
 each member still signs in individually.
+
+---
+
+## 6. Connect ChatGPT
+
+In a ChatGPT Business or Enterprise/Edu workspace, an admin or authorized developer opens **Plugins → + → Add custom MCP server**. Enter the same public URL `https://mcpbitrix.dev.itcoll.com/mcp` and choose OAuth authentication. Create the plugin, complete the Bitrix24 sign-in during the tool scan, then install it. An admin can publish it for the workspace after testing. Individual users authorize with their own Bitrix24 accounts.
 
 ---
 

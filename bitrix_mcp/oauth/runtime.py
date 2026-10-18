@@ -4,6 +4,8 @@ import asyncio
 import time
 from typing import Any
 
+import httpx
+
 from bitrix_mcp.bitrix import BitrixClient
 from bitrix_mcp.oauth.resolver import IdentityResolver, ResolvedIdentity, current_access_token
 from bitrix_mcp.oauth.store import AuditEntry, TokenStore
@@ -18,7 +20,8 @@ class OAuthRuntime:
         resolver: IdentityResolver,
         policy,
         ownership_guard,
-        webhook_client: BitrixClient,
+        webhook_client: BitrixClient | None,
+        http_client: httpx.AsyncClient,
     ):
         self.settings = settings
         self.store = store
@@ -26,15 +29,16 @@ class OAuthRuntime:
         self.policy = policy
         self.ownership_guard = ownership_guard
         self.webhook_client = webhook_client
+        self.http_client = http_client
 
     def client_for(self, identity) -> BitrixClient:
-        # Reuse the shared HTTP client; ownership of close stays with webhook_client.
+        # Reuse the server's shared HTTP client.
         return BitrixClient(
             identity,
             timeout=self.settings.request_timeout_seconds,
             policy=self.policy,
             ownership_guard=self.ownership_guard,
-            http_client=self.webhook_client._get_http_client(),  # noqa: SLF001
+            http_client=self.http_client,
         )
 
     def resolve_from_request(self) -> ResolvedIdentity:
@@ -44,6 +48,7 @@ class OAuthRuntime:
         resolved = self.resolve_from_request()
         if resolved.mode == 'oauth':
             return self.client_for(resolved.identity)
+        assert self.webhook_client is not None
         return self.webhook_client
 
     def ensure_write_identity(self, *, method: str, params: dict[str, Any]) -> ResolvedIdentity | dict[str, Any]:

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import logfire
+import httpx
 from fastmcp import Context, FastMCP
 
 from bitrix_mcp.bitrix import BitrixClient
@@ -131,11 +132,16 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         enabled=settings.ownership_enabled,
     )
 
-    bitrix = BitrixClient(
-        settings.bitrix_webhook_url,
-        timeout=settings.request_timeout_seconds,
-        policy=policy,
-        ownership_guard=ownership_guard,
+    http_client = httpx.AsyncClient(timeout=settings.request_timeout_seconds)
+    bitrix = (
+        BitrixClient(
+            settings.bitrix_webhook_url,
+            timeout=settings.request_timeout_seconds,
+            policy=policy,
+            ownership_guard=ownership_guard,
+            http_client=http_client,
+        )
+        if not settings.oauth_enabled else None
     )
     resolver = IdentityResolver(
         webhook_url=settings.bitrix_webhook_url,
@@ -148,15 +154,18 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         policy=policy,
         ownership_guard=ownership_guard,
         webhook_client=bitrix,
+        http_client=http_client,
     )
-    availability = AvailabilityProvider(bitrix, cache=PORTAL_METHODS_CACHE)
+
+    async def availability() -> AvailabilityProvider:
+        return AvailabilityProvider(runtime.client_for_request(), cache=PORTAL_METHODS_CACHE)
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP):
         try:
             yield
         finally:
-            await bitrix.aclose()
+            await http_client.aclose()
 
     server = FastMCP(
         name='Bitrix24 MCP',
@@ -238,7 +247,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             access=access,
             include_deprecated=includeDeprecated,
             limit=limit,
-            availability=availability,
+            availability=await availability(),
         )
 
     @server.tool
@@ -248,13 +257,14 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             catalog,
             method,
             policy=policy,
-            availability=availability,
+            identity=runtime.resolve_from_request().identity,
+            availability=await availability(),
         )
 
     @server.tool
     async def bitrix_list_scopes() -> dict[str, Any]:
-        """List catalog scopes and summarize which methods/scopes the current webhook can use."""
-        return await list_scopes_data(catalog, availability=availability)
+        """List catalog scopes and methods available to the signed-in Bitrix24 user."""
+        return await list_scopes_data(catalog, availability=await availability())
 
     @server.tool
     async def crm_types_list(

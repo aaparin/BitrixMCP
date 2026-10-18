@@ -40,6 +40,7 @@ async def describe_method_data(
     method: str,
     *,
     policy: MethodPolicy | None = None,
+    identity: Any = None,
     availability: AvailabilityProvider | PortalMethods | None = None,
 ) -> dict[str, Any]:
     spec = catalog.get(method)
@@ -56,7 +57,7 @@ async def describe_method_data(
     payload['accessSource'] = spec.access_source
     payload['source'] = spec.source
     if policy is not None:
-        decision = policy.decide(method, {})
+        decision = policy.decide(method, {}, identity=identity)
         payload['allowed'] = decision.allowed
         payload['policyReason'] = decision.reason or None
         if decision.warnings:
